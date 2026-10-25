@@ -11,6 +11,7 @@ from db import get_db, init_db
 from llm import LLMConfigError, LLMResponseError, classify, generate_reply, summarize
 from prompts import PERSONAS
 from state import TONES, MergeError, empty_state, merge, plan_turn
+import cards as card_deck
 import rapport
 
 app = FastAPI()
@@ -176,8 +177,14 @@ def send_message(session_id: str, request: MessageRequest):
             cur_before = rapport.current_question(state["rapport"])
             state["rapport"] = rapport.apply_classification(state["rapport"], result, turn)
             plan = plan_turn(state, result, turn, cur_before["id"] if cur_before else None)
-            reply_text, suggestions, asked_id = generate_reply(state, history, content, turn, plan)
+            reply_text, suggestions, asked_id, picks = generate_reply(state, history, content, turn, plan)
             rapport.apply_reply(state["rapport"], plan["rapport_action"], asked_id)
+            # 라포가 끝나는 턴에 카드 3장을 제시한다. 대화 기반(근거 있는 카드) 또는 무작위
+            action_type = plan["rapport_action"]["type"]
+            if action_type == "wrap_up":
+                state["rapport"]["cards"] = card_deck.new_cards(card_deck.offer_from_picks(picks), "conversation", turn)
+            elif action_type == "concern":
+                state["rapport"]["cards"] = card_deck.new_cards(card_deck.random_offer(), "random", turn)
         except LLMConfigError as e:
             raise HTTPException(status_code=500, detail=str(e))
         except openai.AuthenticationError:
@@ -194,12 +201,7 @@ def send_message(session_id: str, request: MessageRequest):
             "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, ?, 'assistant', ?, ?)",
             (session_id, turn, reply_text, json.dumps(suggestions, ensure_ascii=False)),
         )
-        conn.execute(
-            "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, ?) "
-            "ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, "
-            "next_item_id = excluded.next_item_id, updated_at = CURRENT_TIMESTAMP",
-            (session_id, json.dumps(state, ensure_ascii=False), next_id),
-        )
+        save_state(conn, session_id, state, next_id)
         conn.commit()
         return {
             "message": {
@@ -247,6 +249,125 @@ def summarize_session(session_id: str):
         )
         conn.commit()
         return {"career_map": career_map}
+    finally:
+        conn.close()
+        lock.release()
+
+
+class CardChoiceRequest(BaseModel):
+    card_id: int
+
+
+def save_state(conn, session_id, state, next_id):
+    conn.execute(
+        "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, "
+        "next_item_id = excluded.next_item_id, updated_at = CURRENT_TIMESTAMP",
+        (session_id, json.dumps(state, ensure_ascii=False), next_id),
+    )
+
+
+def require_pending_cards(state):
+    cards = state["rapport"].get("cards")
+    if not card_deck.pending(cards):
+        raise HTTPException(status_code=422, detail="지금 고를 수 있는 카드가 없습니다.")
+    return cards
+
+
+@app.post("/api/sessions/{session_id}/cards/choose")
+def choose_card(session_id: str, request: CardChoiceRequest):
+    """라포 카드 한 장 선택. 고른 카드는 확인된 기준이 되고, 사용자 메시지로 기록한 뒤 윤이가 그 기준으로 탐색을 시작한다."""
+    lock = acquire_session_lock(session_id)
+    conn = get_db()
+    try:
+        require_session(conn, session_id)
+        state, next_id = load_state(conn, session_id)
+        cards = require_pending_cards(state)
+        chosen = next((c for c in cards["offered"] if c["id"] == request.card_id), None)
+        if chosen is None:
+            raise HTTPException(status_code=422, detail="제시된 카드 중에서 골라 주세요.")
+
+        rows = load_messages(conn, session_id)
+        history = [{"role": r["role"], "content": r["content"]} for r in rows]
+        turn = sum(1 for r in rows if r["role"] == "user") + 1
+
+        cards["chosen_id"] = chosen["id"]
+        state["criteria"].append({
+            "id": next_id,
+            "text": chosen["criterion"],
+            "evidence": chosen.get("evidence") or f"라포 카드 '{chosen['name']}' 선택",
+            "turn": turn,
+            "status": "confirmed",
+        })
+        next_id += 1
+        user_text = f"'{chosen['name']}' 카드를 골랐어요. ({chosen['meaning']})"
+        plan = {
+            "question": "card_focus", "confirm_items": [], "new_texts": [],
+            "rapport_action": {"type": "none", "question": None}, "card": chosen,
+        }
+        try:
+            reply_text, suggestions, _, _ = generate_reply(state, history, user_text, turn, plan)
+        except LLMConfigError as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        except openai.AuthenticationError:
+            raise HTTPException(status_code=500, detail="API 키가 유효하지 않습니다. .env의 OPENAI_API_KEY를 확인하세요.")
+        except (openai.APIError, LLMResponseError):
+            raise HTTPException(status_code=502, detail="모델 응답을 받지 못했습니다. 잠시 후 다시 시도해 주세요.")
+
+        cur_user = conn.execute(
+            "INSERT INTO messages (session_id, turn, role, content) VALUES (?, ?, 'user', ?)",
+            (session_id, turn, user_text),
+        )
+        cur = conn.execute(
+            "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, ?, 'assistant', ?, ?)",
+            (session_id, turn, reply_text, json.dumps(suggestions, ensure_ascii=False)),
+        )
+        save_state(conn, session_id, state, next_id)
+        conn.commit()
+        return {
+            "messages": [
+                {"id": cur_user.lastrowid, "turn": turn, "role": "user", "content": user_text},
+                {"id": cur.lastrowid, "turn": turn, "role": "assistant", "content": reply_text, "suggestions": suggestions},
+            ],
+            "state": state,
+        }
+    finally:
+        conn.close()
+        lock.release()
+
+
+@app.post("/api/sessions/{session_id}/cards/reshuffle")
+def reshuffle_cards(session_id: str):
+    """지금 제시된 3장 대신 무작위 3장을 다시 보여준다. 모델 호출 없음."""
+    lock = acquire_session_lock(session_id)
+    conn = get_db()
+    try:
+        require_session(conn, session_id)
+        state, next_id = load_state(conn, session_id)
+        cards = require_pending_cards(state)
+        exclude = [c["id"] for c in cards["offered"]]
+        state["rapport"]["cards"] = card_deck.new_cards(card_deck.random_offer(exclude), "random", cards["turn"])
+        save_state(conn, session_id, state, next_id)
+        conn.commit()
+        return {"state": state}
+    finally:
+        conn.close()
+        lock.release()
+
+
+@app.post("/api/sessions/{session_id}/cards/dismiss")
+def dismiss_cards(session_id: str):
+    """카드를 고르지 않고 넘어간다. 대화는 그대로 이어진다."""
+    lock = acquire_session_lock(session_id)
+    conn = get_db()
+    try:
+        require_session(conn, session_id)
+        state, next_id = load_state(conn, session_id)
+        cards = require_pending_cards(state)
+        cards["dismissed"] = True
+        save_state(conn, session_id, state, next_id)
+        conn.commit()
+        return {"state": state}
     finally:
         conn.close()
         lock.release()

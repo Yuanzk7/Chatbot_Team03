@@ -139,17 +139,29 @@ def plan_turn(state, result: Classification, turn, current_rapport_id=None):
     돌려주는 plan: {"question": "confirm"|"follow_up"|"rapport", "confirm_items": [...], "new_texts": [...],
                     "rapport_action": {...}}"""
     confirm_items = needs_confirmation(state, turn)
-    answered_current = current_rapport_id is not None and current_rapport_id in result.rapport_answered_ids
     new_texts = [n.text for n in result.new_items] + [
         (u.text or "").strip() for u in result.updates if u.text
     ]
+    r = state["rapport"]
+    # 방금 물은 라포 질문에 내용이 풍부한 답이 오면 질문당 한 번은 꼭 파고든다 (설문처럼 넘어가지 않기 위해).
+    # 그 외의 새 이야기에 대한 후속 질문은 연속 두 턴 하지 않는다 (끝없는 되묻기 방지). 알아가기가 끝난 뒤에는 제한 없음
+    answered_q = next(
+        (q for q in r["questions"] if q["id"] == current_rapport_id and q["id"] in result.rapport_answered_ids),
+        None,
+    )
+    rich_answer = answered_q is not None and bool(new_texts) and not answered_q.get("followed_up")
+    follow_up_allowed = r["done"] or rich_answer or r.get("last_follow_up_turn") != turn - 1
     if confirm_items:
         question = "confirm"
-    elif new_texts and not answered_current:
-        question = "follow_up"  # 사용자가 꺼낸 이야기를 우선한다
+    elif new_texts and follow_up_allowed:
+        question = "follow_up"
+        if rich_answer:
+            answered_q["followed_up"] = True
+        if not r["done"]:
+            r["last_follow_up_turn"] = turn
     else:
         question = "rapport"
-    action = choose_action(state["rapport"], turn, hold=question != "rapport")
+    action = choose_action(r, turn, hold=question != "rapport")
     return {"question": question, "confirm_items": confirm_items, "new_texts": new_texts, "rapport_action": action}
 
 
@@ -166,6 +178,12 @@ def format_turn_plan(plan):
     elif q == "follow_up":
         lines.append("[이번 턴 질문] 사용자가 방금 꺼낸 이야기(새로 드러난 내용: " + "; ".join(plan["new_texts"]) + ")를 되짚고, "
                      "그 내용을 구체화하는 후속 질문 하나만 한다 (예: 관련 경험, 그렇게 느낀 이유). 다른 질문은 하지 않는다.")
+    elif q == "card_focus":
+        card = plan["card"]
+        lines.append(
+            f"[이번 턴 질문] 사용자가 라포 카드 '{card['name']}'({card['meaning']})를 골랐다. 선택을 반갑게 받아들이고, "
+            "이 기준을 진로 탐색의 중심으로 삼아 그 기준이 드러났던 경험이나 상황을 구체화하는 질문 하나를 한다. 다른 질문은 하지 않는다."
+        )
     else:
         lines.append("[이번 턴 질문] 위 '서로 알아가기' 지시를 따른다. 지시에 질문이 없으면 사용자의 말에 이어지는 탐색 질문 하나를 한다.")
     return "\n".join(lines)
@@ -193,6 +211,14 @@ def format_state(state, turn=None, plan=None):
             lines.append(
                 f"- {c['turn']}턴: \"{c['before']['text']}\" {c['before']['status']} → "
                 f"\"{c['after']['text']}\" {c['after']['status']}"
+            )
+    cards = state.get("rapport", {}).get("cards")
+    if cards and cards.get("chosen_id"):
+        chosen = next((c for c in cards["offered"] if c["id"] == cards["chosen_id"]), None)
+        if chosen:
+            lines.append(
+                f"[중심 기준 카드] {chosen['name']}: {chosen['meaning']}. 사용자가 직접 고른 기준이므로 탐색의 중심으로 삼되, "
+                "다른 기준도 열어 둔다."
             )
     lines.append(
         "미확인 항목은 확정된 기준처럼 쓰지 말고, 조언에 활용하기 전에 사용자에게 확인한다. "

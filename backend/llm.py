@@ -78,10 +78,16 @@ def summarize(state, history) -> CareerMapOutput:
     return _parse(instructions, history, CareerMapOutput, "summary")
 
 
+class CardPick(BaseModel):
+    card_id: int
+    evidence: str
+
+
 class Reply(BaseModel):
     content: str
     suggestions: List[str]
     asked_question_id: Optional[int]
+    rapport_cards: List[CardPick]
 
 
 MAX_SUGGESTIONS = 3
@@ -90,7 +96,7 @@ MAX_SUGGESTION_CHARS = 30
 
 def generate_reply(state, history, user_message, turn, plan):
     """갱신된 state와 이번 턴의 질문 계획(plan_turn 결과)을 시스템 프롬프트에 붙여 답변을 생성한다.
-    (content, suggestions, asked_question_id)를 돌려준다."""
+    (content, suggestions, asked_question_id, rapport_cards)를 돌려준다."""
     reply = _parse(
         SYSTEM_PROMPT
         + "\n"
@@ -109,4 +115,4 @@ def generate_reply(state, history, user_message, turn, plan):
         s = s.strip()
         if s and len(s) <= MAX_SUGGESTION_CHARS and s not in suggestions:
             suggestions.append(s)
-    return content, suggestions[:MAX_SUGGESTIONS], reply.asked_question_id
+    return content, suggestions[:MAX_SUGGESTIONS], reply.asked_question_id, reply.rapport_cards

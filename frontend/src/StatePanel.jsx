@@ -25,7 +25,12 @@ function RapportSection({ rapport }) {
       </h3>
       {rapport.done && (
         <p className="panel-empty">
-          {rapport.end_reason === 'completed' ? '알아가기를 마치고 진로 탐색으로 넘어갔어요.' : '고민 이야기로 바로 넘어갔어요.'}
+          {rapport.end_reason === 'user_requested' ? '고민 이야기로 바로 넘어갔어요.' : '알아가기를 마치고 진로 탐색으로 넘어갔어요.'}
+        </p>
+      )}
+      {rapport.cards?.chosen_id && (
+        <p className="chosen-card">
+          중심 카드: {rapport.cards.offered.find((c) => c.id === rapport.cards.chosen_id)?.name}
         </p>
       )}
       {rapport.questions.length > 0 && (

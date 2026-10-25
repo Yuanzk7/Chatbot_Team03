@@ -154,13 +154,30 @@ def test_plan_prefers_follow_up_when_user_brings_new_content():
     assert "후속 질문 하나만" in format_state(state, 2, plan)
 
 
-def test_plan_keeps_rapport_when_new_content_answers_current_question():
+def test_follow_up_once_then_next_rapport_question():
     state, _ = seeded()
-    result = classification(
-        new_items=[{"kind": "criterion", "text": "안정", "evidence": "안정 쪽이요", "status": "confirmed"}],
-        rapport_answered_ids=[34],
+    rich = classification(
+        new_items=[{"kind": "experience", "text": "유럽 한 달 여행", "evidence": "유럽에서 한 달", "status": "confirmed"}],
+        rapport_answered_ids=[17],
     )
-    assert plan_turn(state, result, 2, current_rapport_id=34)["question"] == "rapport"
+    # 라포 답에 내용이 풍부하면 먼저 한 번 파고든다
+    assert plan_turn(state, rich, 2, current_rapport_id=17)["question"] == "follow_up"
+    assert state["rapport"]["last_follow_up_turn"] == 2
+    # 바로 다음 턴에 또 새 내용이 와도 이번엔 라포 질문으로 넘어간다
+    again = classification(new_items=[{"kind": "experience", "text": "현지 친구", "evidence": "친구를 사귀었어요", "status": "confirmed"}])
+    assert plan_turn(state, again, 3)["question"] == "rapport"
+    # 그다음 턴에는 다시 후속 질문이 가능하다
+    assert plan_turn(state, again, 4)["question"] == "follow_up"
+
+
+def test_follow_ups_unlimited_after_rapport_done():
+    state, _ = seeded()
+    state["rapport"]["done"] = True
+    state["rapport"]["end_reason"] = "completed"
+    state["rapport"]["done_turn"] = 3
+    new = classification(new_items=[{"kind": "experience", "text": "동아리", "evidence": "동아리에서", "status": "confirmed"}])
+    assert plan_turn(state, new, 5)["question"] == "follow_up"
+    assert plan_turn(state, new, 6)["question"] == "follow_up"
 
 
 def test_plan_confirm_beats_follow_up():
@@ -172,3 +189,19 @@ def test_plan_confirm_beats_follow_up():
         {"kind": "experience", "text": "동아리 활동", "evidence": "동아리에서", "status": "confirmed"},
     ])
     assert plan_turn(state, result, 2)["question"] == "confirm"
+
+
+def test_rich_answer_to_asked_question_always_gets_one_follow_up():
+    state, _ = seeded()
+    state["rapport"]["questions"] = [{"id": 17, "text": "가장 재미있었던 경험", "status": "asked", "asks": 1, "holds": 0}]
+    state["rapport"]["last_follow_up_turn"] = 1  # 직전 턴에 이미 후속 질문을 했어도
+    rich = classification(
+        new_items=[{"kind": "experience", "text": "유럽 한 달 여행", "evidence": "유럽에서 한 달", "status": "confirmed"}],
+        rapport_answered_ids=[17],
+    )
+    assert plan_turn(state, rich, 2, current_rapport_id=17)["question"] == "follow_up"
+    q17 = next(q for q in state["rapport"]["questions"] if q["id"] == 17)
+    assert q17["followed_up"] is True
+    # 같은 질문의 답을 또 파고들진 않는다
+    state["rapport"]["last_follow_up_turn"] = 2
+    assert plan_turn(state, rich, 3, current_rapport_id=17)["question"] == "rapport"

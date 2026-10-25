@@ -30,8 +30,15 @@ def test_select_prefers_category_and_tag_overlap_without_duplicates():
     picked = R.select_questions("values", ["stability"], exclude_ids=set(), limit=5, rng=rng())
     ids = [q["id"] for q in picked]
     assert len(ids) == 5 and len(set(ids)) == 5
-    assert 34 in ids  # 가치관 범주 + 안정·도전 태그 → 최고 점수
-    assert all(q["category"] == "values" for q in picked)
+    assert ids[0] == 34  # 가치관 범주 + 안정·도전 태그 → 최고 점수
+    assert not any(q["light"] for q in picked)
+
+
+def test_light_questions_only_when_nothing_else_scores():
+    picked = R.select_questions("taste", ["interest"], exclude_ids=set(), limit=5, rng=rng())
+    assert not {13, 14, 15} & {q["id"] for q in picked}  # 영화·노래·여행지는 뒤로 밀린다
+    only_light = R.select_questions("daily", [], exclude_ids={2, 4, 5, 6, 8, 9, 10}, limit=5, rng=rng())
+    assert only_light == []  # 가벼운 질문만 남으면 0점이라 뽑지 않는다 → 기본 질문으로 시작
 
 
 def test_no_info_starts_with_default_opener():
@@ -141,3 +148,13 @@ def test_hold_without_current_question_consumes_nothing():
     h = R.choose_action(r, 1, hold=True)
     assert h["type"] == "hold"
     assert all(q["status"] == "pending" for q in r["questions"])
+
+
+def test_turn_limit_wraps_up_even_if_questions_remain():
+    r = seeded()
+    r = R.apply_classification(r, signals(), turn=R.TURN_LIMIT - 1, rng=rng())
+    assert not r["done"]
+    r = R.apply_classification(r, signals(), turn=R.TURN_LIMIT, rng=rng())
+    assert r["done"] and r["end_reason"] == "turn_limit"
+    assert R.choose_action(r, R.TURN_LIMIT)["type"] == "wrap_up"
+    assert R.choose_action(r, R.TURN_LIMIT + 1)["type"] == "none"

@@ -4,6 +4,8 @@ import random
 from copy import deepcopy
 from typing import List, Literal, Optional
 
+from cards import DECK_BY_ID, deck_text
+
 Category = Literal["daily", "taste", "relationship", "values", "unist"]
 Tag = Literal["interest", "values", "workstyle", "relationship", "stability", "academic", "future", "daily"]
 
@@ -17,10 +19,15 @@ TAG_LABELS = {
 MAX_QUESTIONS = 5       # 상한이지 필수 수량이 아니다
 MAX_ASKS = 2            # 같은 질문을 이 횟수까지 물었는데 답이 없으면 건너뛴 것으로 본다
 MAX_HOLDS = 2           # 사용자가 다른 이야기를 꺼내 같은 질문을 이 횟수만큼 보류하면 건너뛴 것으로 본다
+TURN_LIMIT = 6          # 이 턴까지 알아가기가 안 끝났으면 마무리한다. 대화 자체로 라포가 충분히 쌓였다고 본다
 DEFAULT_OPENER_ID = 17  # 범주·태그를 판정할 정보가 부족할 때 시작하는 가벼운 질문
 
+# 분위기를 푸는 가벼운 질문. 진로 맥락 한가운데 끼면 튀므로 다른 후보가 없을 때만 뽑는다
+LIGHT_IDS = {1, 3, 7, 13, 14, 15, 44}
+
+
 def _q(i, category, tags, text):
-    return {"id": i, "category": category, "tags": tags, "text": text}
+    return {"id": i, "category": category, "tags": tags, "text": text, "light": i in LIGHT_IDS}
 
 QUESTIONS = [
     _q(1, "daily", ["daily", "workstyle"], "아침형 인간이야, 밤형 인간이야?"),
@@ -87,6 +94,8 @@ def empty_rapport():
         "done": False,
         "end_reason": None,     # completed | user_requested
         "done_turn": None,      # done으로 바뀐 턴 (그 턴에만 마무리 지시를 넣는다)
+        "cards": None,          # 라포 카드 제시 {offered, source, chosen_id, dismissed, turn} (cards.py)
+        "last_follow_up_turn": None,  # 사용자 이야기에 후속 질문을 한 턴. 연속 두 턴은 하지 않는다
     }
 
 
@@ -95,12 +104,14 @@ def _entry(q):
 
 
 def select_questions(category, tags, exclude_ids, limit, rng=random):
-    """범주 일치 2점 + 태그 겹침 1점씩. 0점은 제외. 동점은 무작위. 최대 limit개."""
+    """범주 일치 1점 + 태그 겹침 1점씩, 가벼운 질문은 1점 감점. 0점 이하는 제외. 동점은 무작위. 최대 limit개."""
     scored = []
     for q in QUESTIONS:
         if q["id"] in exclude_ids:
             continue
-        score = (2 if category and q["category"] == category else 0) + len(set(q["tags"]) & set(tags))
+        score = (1 if category and q["category"] == category else 0) + len(set(q["tags"]) & set(tags))
+        if q["light"]:
+            score -= 1
         if score > 0:
             scored.append((score, rng.random(), q))
     scored.sort(key=lambda t: (-t[0], t[1]))
@@ -126,6 +137,10 @@ def apply_classification(rapport, signals, turn, rng=random):
 
     if signals.wants_concern_first:
         _finish(r, "user_requested", turn)
+        return r
+    if turn >= TURN_LIMIT:
+        # 사용자가 자기 이야기를 계속 꺼내 질문이 보류되더라도, 이 시점이면 마무리하고 카드를 보여준다
+        _finish(r, "turn_limit", turn)
         return r
 
     if r["category"] is None and signals.rapport_category:
@@ -172,7 +187,7 @@ def choose_action(rapport, turn, hold=False):
     r = rapport
     if r["done"]:
         if r["done_turn"] == turn:
-            return {"type": "wrap_up" if r["end_reason"] == "completed" else "concern", "question": None}
+            return {"type": "concern" if r["end_reason"] == "user_requested" else "wrap_up", "question": None}
         return {"type": "none", "question": None}
 
     cur = current_question(r)
@@ -236,13 +251,20 @@ def format_rapport(rapport, action):
         )
     elif t == "wrap_up":
         lines.append(
-            "[이번 턴 지시] 알아가기 단계가 끝났다. 지금까지 알게 된 사용자의 경험과 기준을 2~3문장으로 되짚고, "
-            "진로 탐색 질문으로 자연스럽게 넘어간다. asked_question_id는 null."
+            "[이번 턴 지시] 알아가기 단계가 끝났다. 지금까지 알게 된 사용자의 경험과 기준을 2~3문장으로 되짚은 뒤, "
+            "\"아래 카드 중 지금 가장 나다운 것 하나를 골라 주세요\"라고 안내한다. 이번 턴에는 질문을 하지 않고 suggestions는 빈 배열로 둔다. "
+            "asked_question_id는 null."
         )
+        lines.append(
+            "rapport_cards: 아래 카드 15장 중 지금까지의 대화에서 근거가 있는 카드를 최대 3장 고른다. 각 카드에 근거가 된 사용자 발언을 짧게 인용한다. "
+            "근거가 있는 카드가 3장이 안 되면 있는 만큼만 적는다. 근거 없이 채우지 않는다."
+        )
+        lines.append(deck_text())
     elif t == "concern":
         lines.append(
             "[이번 턴 지시] 사용자가 알아가기 질문 대신 바로 진로 고민으로 들어가길 원한다. 알아가기 질문을 하지 않는다. "
-            "고민에 공감하고, 지금 가장 고민되는 선택이나 상황과 관련 경험을 편하게 말하도록 묻는다. asked_question_id는 null."
+            "바로 고민으로 가겠다고 짧게 답하고, 그 전에 \"아래 카드 중 지금 가장 나다운 것 하나만 골라 주세요\"라고 안내한다. "
+            "이번 턴에는 질문을 하지 않고 suggestions는 빈 배열로 둔다. asked_question_id는 null. rapport_cards는 빈 배열."
         )
     elif t == "hold":
         lines.append("[이번 턴 지시] 알아가기 질문은 이번 턴에 보류한다. 아래 '이번 턴의 질문'을 따른다. asked_question_id는 null.")

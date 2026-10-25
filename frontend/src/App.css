@@ -359,6 +359,108 @@ button.suggestion:hover:not(:disabled) {
   background: var(--blue-soft);
 }
 
+/* 라포 카드 고르기 */
+.rapport-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.cards-label {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+button.rapport-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 12px;
+  background: var(--surface);
+  color: var(--text);
+  border: 2px solid var(--blue-line);
+  border-radius: 18px;
+  text-align: center;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+
+button.rapport-card:hover:not(:disabled) {
+  transform: translateY(-3px);
+  border-color: var(--blue);
+  box-shadow: var(--shadow);
+}
+
+.card-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+}
+
+.card-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 4px 6px;
+}
+
+.card-emoji {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.card-tagline {
+  font-size: 12px;
+  color: var(--blue-dark);
+}
+
+button.rapport-card strong {
+  font-size: 15px;
+  color: var(--blue-dark);
+}
+
+.card-meaning {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.card-evidence {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #92400e;
+  line-height: 1.4;
+}
+
+.cards-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+button.link {
+  background: none;
+  color: var(--muted);
+  padding: 6px 8px;
+  text-decoration: underline;
+}
+
+.chosen-card {
+  margin-top: 6px !important;
+  font-size: 13px;
+  color: #1d4ed8;
+}
+
 /* ---------- 입력창 ---------- */
 .composer {
   display: flex;
@@ -634,6 +736,10 @@ button.summarize.stale {
 
   .bubble {
     max-width: 90%;
+  }
+
+  .cards-grid {
+    grid-template-columns: 1fr;
   }
 
   .row.assistant {

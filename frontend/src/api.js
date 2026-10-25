@@ -38,3 +38,15 @@ export const sendMessage = (sessionId, content, requestId) =>
 
 export const summarize = (sessionId) =>
   request(`/api/sessions/${sessionId}/summary`, { method: 'POST' })
+
+export const chooseCard = (sessionId, cardId) =>
+  request(`/api/sessions/${sessionId}/cards/choose`, {
+    method: 'POST',
+    body: JSON.stringify({ card_id: cardId }),
+  })
+
+export const reshuffleCards = (sessionId) =>
+  request(`/api/sessions/${sessionId}/cards/reshuffle`, { method: 'POST' })
+
+export const dismissCards = (sessionId) =>
+  request(`/api/sessions/${sessionId}/cards/dismiss`, { method: 'POST' })

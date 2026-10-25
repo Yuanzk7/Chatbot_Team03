@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ApiError, createSession, getSession, sendMessage, summarize } from './api'
+import {
+  ApiError,
+  chooseCard,
+  createSession,
+  dismissCards,
+  getSession,
+  reshuffleCards,
+  sendMessage,
+  summarize,
+} from './api'
 import SidePanel from './SidePanel.jsx'
+import RapportCards from './RapportCards.jsx'
 import yuni from './assets/yuni.png'
 import personaFriend from './assets/persona-friend.webp'
 import personaAnalyst from './assets/persona-analyst.webp'
@@ -125,8 +135,44 @@ export default function App() {
     }
   }
 
-  // 전송 또는 정리 요청이 진행 중이면 전송·정리·새 상담을 모두 막는다
-  const busy = pending !== null || summarizing
+  // 카드 선택 처리 중 (모델 호출이 있어 전송과 겹치지 않게 막는다)
+  const [cardBusy, setCardBusy] = useState(false)
+  // 전송·정리·카드 선택 중 하나라도 진행 중이면 전송·정리·새 상담을 모두 막는다
+  const busy = pending !== null || summarizing || cardBusy
+
+  const pendingCards =
+    state?.rapport?.cards && state.rapport.cards.chosen_id === null && !state.rapport.cards.dismissed
+      ? state.rapport.cards
+      : null
+
+  async function handleChooseCard(cardId) {
+    if (busy || !sessionId) return
+    setCardBusy(true)
+    setError(null)
+    try {
+      const { messages: added, state: newState } = await chooseCard(sessionId, cardId)
+      setMessages((prev) => [...prev, ...added])
+      setState(newState)
+      setLastMessageId(added[added.length - 1].id)
+    } catch (e) {
+      setError({ message: e.message, retry: null })
+    } finally {
+      setCardBusy(false)
+    }
+  }
+
+  async function handleCardsAction(action) {
+    if (busy || !sessionId) return
+    setCardBusy(true)
+    try {
+      const { state: newState } = await action(sessionId)
+      setState(newState)
+    } catch (e) {
+      setError({ message: e.message, retry: null })
+    } finally {
+      setCardBusy(false)
+    }
+  }
 
   async function handleSummarize() {
     if (busy || !sessionId) return
@@ -280,7 +326,16 @@ export default function App() {
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                   </div>
                   {/* 마지막 답변에만 예시 답변 칩을 보여준다. 누르면 입력창에 들어가고 고쳐서 보낼 수 있다 */}
-                  {idx === messages.length - 1 && !pending && m.suggestions?.length > 0 && (
+                  {idx === messages.length - 1 && !pending && pendingCards && (
+                    <RapportCards
+                      cards={pendingCards}
+                      busy={busy}
+                      onChoose={handleChooseCard}
+                      onReshuffle={() => handleCardsAction(reshuffleCards)}
+                      onDismiss={() => handleCardsAction(dismissCards)}
+                    />
+                  )}
+                  {idx === messages.length - 1 && !pending && !pendingCards && m.suggestions?.length > 0 && (
                     <div className="suggestions">
                       <span className="suggestions-label">예시 답변 · 누르면 입력창에 들어가요</span>
                       {m.suggestions.map((text) => (
@@ -312,6 +367,12 @@ export default function App() {
                 <div className="bubble assistant typing">답변을 작성하고 있어요…</div>
               </div>
             </>
+          )}
+          {cardBusy && (
+            <div className="row assistant">
+              <Avatar />
+              <div className="bubble assistant typing">카드를 보고 있어요…</div>
+            </div>
           )}
           {error && (
             <div className="bubble error">
