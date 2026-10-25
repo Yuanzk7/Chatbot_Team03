@@ -45,12 +45,19 @@ def load_career_map(conn, session_id):
     return json.loads(row["map_json"]) if row else None
 
 
+def message_dict(row):
+    m = {"id": row["id"], "turn": row["turn"], "role": row["role"], "content": row["content"]}
+    if row["role"] == "assistant":
+        m["suggestions"] = json.loads(row["suggestions"]) if row["suggestions"] else []
+    return m
+
+
 def load_messages(conn, session_id):
     rows = conn.execute(
-        "SELECT id, turn, role, content FROM messages WHERE session_id = ? ORDER BY id",
+        "SELECT id, turn, role, content, suggestions FROM messages WHERE session_id = ? ORDER BY id",
         (session_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [message_dict(r) for r in rows]
 
 
 def acquire_session_lock(session_id):
@@ -65,14 +72,28 @@ class MessageRequest(BaseModel):
     request_id: str
 
 
+class SessionRequest(BaseModel):
+    preferred_name: str
+
+
 @app.post("/api/sessions")
-def create_session():
+def create_session(request: SessionRequest):
+    """시작 화면에서 받은 이름·호칭으로 상담을 만든다. 챗봇은 호칭을 다시 묻지 않는다."""
+    name = request.preferred_name.strip()
+    if not name or len(name) > 20:
+        raise HTTPException(status_code=422, detail="이름이나 호칭을 1~20자로 입력해 주세요.")
     session_id = str(uuid.uuid4())
+    state = empty_state()
+    state["preferred_name"] = name
     conn = get_db()
     conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
+    conn.execute(
+        "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, 1)",
+        (session_id, json.dumps(state, ensure_ascii=False)),
+    )
     conn.commit()
     conn.close()
-    return {"session_id": session_id}
+    return {"session_id": session_id, "preferred_name": name}
 
 
 @app.get("/api/sessions/{session_id}")
@@ -113,11 +134,11 @@ def send_message(session_id: str, request: MessageRequest):
             if dup["session_id"] != session_id or dup["content"] != content:
                 raise HTTPException(status_code=409, detail="같은 요청 ID로 다른 내용이 전송되었습니다.")
             reply = conn.execute(
-                "SELECT id, turn, role, content FROM messages "
+                "SELECT id, turn, role, content, suggestions FROM messages "
                 "WHERE session_id = ? AND turn = ? AND role = 'assistant'",
                 (session_id, dup["turn"]),
             ).fetchone()
-            return {"message": dict(reply), "state": state}
+            return {"message": message_dict(reply), "state": state}
 
         rows = load_messages(conn, session_id)
         history = [{"role": r["role"], "content": r["content"]} for r in rows]
@@ -127,7 +148,7 @@ def send_message(session_id: str, request: MessageRequest):
             # 1) 분류 → 2) 코드 병합 → 3) 갱신된 state로 응답 생성
             result = classify(state, history, content)
             state, next_id = merge(state, result, turn, next_id)
-            reply_text = generate_reply(state, history, content, turn)
+            reply_text, suggestions = generate_reply(state, history, content, turn)
         except LLMConfigError as e:
             raise HTTPException(status_code=500, detail=str(e))
         except openai.AuthenticationError:
@@ -141,8 +162,8 @@ def send_message(session_id: str, request: MessageRequest):
             (session_id, turn, content, request.request_id),
         )
         cur = conn.execute(
-            "INSERT INTO messages (session_id, turn, role, content) VALUES (?, ?, 'assistant', ?)",
-            (session_id, turn, reply_text),
+            "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, ?, 'assistant', ?, ?)",
+            (session_id, turn, reply_text, json.dumps(suggestions, ensure_ascii=False)),
         )
         conn.execute(
             "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, ?) "
@@ -152,7 +173,13 @@ def send_message(session_id: str, request: MessageRequest):
         )
         conn.commit()
         return {
-            "message": {"id": cur.lastrowid, "turn": turn, "role": "assistant", "content": reply_text},
+            "message": {
+                "id": cur.lastrowid,
+                "turn": turn,
+                "role": "assistant",
+                "content": reply_text,
+                "suggestions": suggestions,
+            },
             "state": state,
         }
     finally:

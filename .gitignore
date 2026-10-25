@@ -31,3 +31,8 @@ pnpm-debug.log*
 
 # Test cache
 .pytest_cache/
+
+# 설계 문서 (로컬 보관용, 저장소에는 올리지 않음)
+CLAUDE.MD
+Interim_demo.md
+MVP_Design.md

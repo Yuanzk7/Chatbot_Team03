@@ -1,9 +1,11 @@
 import json
 import os
 from pathlib import Path
+from typing import List
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from pydantic import BaseModel
 
 from career_map import CareerMapOutput, active_criteria
 from prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
@@ -76,16 +78,29 @@ def summarize(state, history) -> CareerMapOutput:
     return _parse(instructions, history, CareerMapOutput, "summary")
 
 
+class Reply(BaseModel):
+    content: str
+    suggestions: List[str]
+
+
+MAX_SUGGESTIONS = 3
+MAX_SUGGESTION_CHARS = 30
+
+
 def generate_reply(state, history, user_message, turn):
-    """갱신된 state를 시스템 프롬프트에 붙여 답변을 생성한다."""
-    client = _client()
-    response = client.responses.create(
-        model=MODEL,
-        instructions=SYSTEM_PROMPT + "\n" + format_state(state, turn),
-        input=_messages(history, user_message),
-        **_reasoning_kwargs(),
+    """갱신된 state를 시스템 프롬프트에 붙여 답변과 예시 답변을 생성한다. (content, suggestions)를 돌려준다."""
+    reply = _parse(
+        SYSTEM_PROMPT + "\n" + format_state(state, turn),
+        _messages(history, user_message),
+        Reply,
+        "reply",
     )
-    text = (response.output_text or "").strip()
-    if response.status != "completed" or not text:
-        raise LLMResponseError(f"reply status={response.status}, empty={not text}")
-    return text
+    content = reply.content.strip()
+    if not content:
+        raise LLMResponseError("reply content empty")
+    suggestions = []
+    for s in reply.suggestions:
+        s = s.strip()
+        if s and len(s) <= MAX_SUGGESTION_CHARS and s not in suggestions:
+            suggestions.append(s)
+    return content, suggestions[:MAX_SUGGESTIONS]
