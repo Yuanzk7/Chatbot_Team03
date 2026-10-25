@@ -1,0 +1,91 @@
+import json
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+from career_map import CareerMapOutput, active_criteria
+from prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
+from state import Classification, format_state
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+MODEL = os.getenv("OPENAI_MODEL", "")
+REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "")
+TIMEOUT_SECONDS = 60
+
+
+class LLMConfigError(Exception):
+    pass
+
+
+class LLMResponseError(Exception):
+    """모델이 미완료(incomplete) 상태이거나 빈 답변을 돌려준 경우."""
+
+
+def _client():
+    if not os.getenv("OPENAI_API_KEY"):
+        raise LLMConfigError("API 키가 설정되지 않았습니다. .env의 OPENAI_API_KEY를 확인하세요.")
+    if not MODEL:
+        raise LLMConfigError("모델이 설정되지 않았습니다. .env의 OPENAI_MODEL을 확인하세요.")
+    return OpenAI(timeout=TIMEOUT_SECONDS)
+
+
+def _reasoning_kwargs():
+    return {"reasoning": {"effort": REASONING_EFFORT}} if REASONING_EFFORT else {}
+
+
+def _messages(history, user_message):
+    """저장된 전체 대화 + 아직 저장되지 않은 현재 입력."""
+    return history + [{"role": "user", "content": user_message}]
+
+
+def _parse(instructions, messages, text_format, label):
+    """구조화 출력 호출. 파싱·검증 실패와 미완료 응답은 LLMResponseError로 통일한다."""
+    client = _client()
+    try:
+        response = client.responses.parse(
+            model=MODEL,
+            instructions=instructions,
+            input=messages,
+            text_format=text_format,
+            **_reasoning_kwargs(),
+        )
+    except ValueError as e:
+        # pydantic ValidationError와 json.JSONDecodeError 모두 ValueError의 하위 클래스
+        raise LLMResponseError(f"{label} parse failed: {e}") from e
+    if response.status != "completed" or response.output_parsed is None:
+        raise LLMResponseError(f"{label} status={response.status}")
+    return response.output_parsed
+
+
+def classify(state, history, user_message) -> Classification:
+    """현재 입력에서 새 경험·기준·제약과 정정을 추출한다 (MVP_Design.md 3.3)."""
+    instructions = CLASSIFY_PROMPT + "\n## 현재 state\n" + json.dumps(state, ensure_ascii=False)
+    return _parse(instructions, _messages(history, user_message), Classification, "classify")
+
+
+def summarize(state, history) -> CareerMapOutput:
+    """전체 대화와 활성 선택 기준으로 후보 비교·다음 탐색 행동을 정리한다 (MVP_Design.md 3.4)."""
+    instructions = (
+        SUMMARY_PROMPT
+        + "\n## 선택 기준\n"
+        + json.dumps(active_criteria(state), ensure_ascii=False)
+    )
+    return _parse(instructions, history, CareerMapOutput, "summary")
+
+
+def generate_reply(state, history, user_message, turn):
+    """갱신된 state를 시스템 프롬프트에 붙여 답변을 생성한다."""
+    client = _client()
+    response = client.responses.create(
+        model=MODEL,
+        instructions=SYSTEM_PROMPT + "\n" + format_state(state, turn),
+        input=_messages(history, user_message),
+        **_reasoning_kwargs(),
+    )
+    text = (response.output_text or "").strip()
+    if response.status != "completed" or not text:
+        raise LLMResponseError(f"reply status={response.status}, empty={not text}")
+    return text
