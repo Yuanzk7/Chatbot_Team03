@@ -4,15 +4,19 @@ import remarkGfm from 'remark-gfm'
 import { ApiError, createSession, getSession, sendMessage, summarize } from './api'
 import SidePanel from './SidePanel.jsx'
 import yuni from './assets/yuni.png'
+import personaFriend from './assets/persona-friend.webp'
+import personaAnalyst from './assets/persona-analyst.webp'
+import personaSpicy from './assets/persona-spicy.webp'
 import './App.css'
 
 const STORAGE_KEY = 'career-chat-session-id'
 
-// 첫 화면 예시 문장. 특정 직업·분야를 암시하지 않는 중립적인 표현만 쓴다 (성급한 추천 제한 원칙).
-const STARTER_PROMPTS = [
-  '무엇을 하고 싶은지 모르겠어요',
-  '여러 진로 사이에서 고민하고 있어요',
-  '관심 있는 분야를 더 알아보고 싶어요',
+// 이름 화면에서 고르는 말투(페르소나). 서버 prompts.PERSONAS의 키와 같다.
+// 카드 그림 안에 이름과 예시 문장이 들어 있어 화면에는 그림만 보여준다
+const PERSONAS = [
+  { value: 'friend', label: '5년지기 친구', image: personaFriend },
+  { value: 'counselor', label: '차분한 분석가', image: personaAnalyst },
+  { value: 'spicy', label: '매운맛 조언가', image: personaSpicy },
 ]
 
 // 챗봇 말풍선 옆 프로필: 동그라미 안에 윤이 얼굴
@@ -28,6 +32,7 @@ export default function App() {
   // 'loading': 저장된 상담 복원 중, 'name': 이름 입력 화면, 'chat': 상담 화면
   const [screen, setScreen] = useState('loading')
   const [name, setName] = useState('')
+  const [tone, setTone] = useState('counselor')
   const [nameError, setNameError] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -47,14 +52,15 @@ export default function App() {
   const [error, setError] = useState(null)
   const bottomRef = useRef(null)
 
-  async function startNewSession(preferredName) {
-    const { session_id, preferred_name } = await createSession(preferredName)
+  async function startNewSession(preferredName, selectedTone) {
+    // 서버가 윤이의 인사를 첫 메시지로 넣어 돌려준다
+    const { session_id, state: newState, message } = await createSession(preferredName, selectedTone)
     localStorage.setItem(STORAGE_KEY, session_id)
     setSessionId(session_id)
-    setMessages([])
-    setState({ preferred_name, experiences: [], criteria: [], constraints: [], corrections: [] })
+    setMessages([message])
+    setState(newState)
     setCareerMap(null)
-    setLastMessageId(0)
+    setLastMessageId(message.id)
     setSummaryError(null)
     setPending(null)
     setError(null)
@@ -74,6 +80,7 @@ export default function App() {
           setCareerMap(data.career_map)
           setLastMessageId(data.last_message_id)
           setName(data.state.preferred_name ?? '')
+          setTone(data.state.tone ?? 'counselor')
           setScreen('chat')
           return
         } catch (e) {
@@ -92,7 +99,7 @@ export default function App() {
     if (!trimmed) return
     setNameError(null)
     try {
-      await startNewSession(trimmed)
+      await startNewSession(trimmed, tone)
     } catch (err) {
       setNameError(err.message)
     }
@@ -157,10 +164,11 @@ export default function App() {
     if (busy) return
     setPanelView(null)
     const currentName = (state?.preferred_name || name).trim()
-    if (!currentName || messages.length === 0) return
-    if (messages.length > 0 && !window.confirm('새 대화를 시작할까요? 이름은 그대로 유지되고, 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
+    const hasUserMessages = messages.some((m) => m.role === 'user')
+    if (!currentName || !hasUserMessages) return
+    if (!window.confirm('새 대화를 시작할까요? 이름과 말투는 그대로 유지되고, 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
     try {
-      await startNewSession(currentName)
+      await startNewSession(currentName, state?.tone ?? tone)
     } catch (e) {
       setError({ message: e.message, retry: null })
     }
@@ -168,7 +176,7 @@ export default function App() {
 
   function handleNewSession() {
     if (busy) return
-    if (messages.length > 0 && !window.confirm('새 상담을 시작할까요? 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
+    if (messages.some((m) => m.role === 'user') && !window.confirm('새 상담을 시작할까요? 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
     // 이름 화면으로 돌아간다. 이전 이름은 입력창에 남겨 둔다
     localStorage.removeItem(STORAGE_KEY)
     setSessionId(null)
@@ -192,7 +200,6 @@ export default function App() {
     return (
       <div className="app">
         <form className="name-screen" onSubmit={handleStart}>
-          <img src={yuni} alt="" className="name-mascot" />
           <h1>CareerMate</h1>
           <p>나의 진로를 찾아가는 대화</p>
           <label htmlFor="name-input">어떻게 불러드리면 좋을까요?</label>
@@ -204,6 +211,22 @@ export default function App() {
             maxLength={20}
             autoFocus
           />
+          <p className="persona-title">어떤 윤이와 이야기할까요?</p>
+          <div className="persona-grid" role="radiogroup" aria-label="말투">
+            {PERSONAS.map((p) => (
+              <button
+                key={p.value}
+                type="button"
+                role="radio"
+                aria-checked={tone === p.value}
+                aria-label={p.label}
+                className={`persona${tone === p.value ? ' active' : ''}`}
+                onClick={() => setTone(p.value)}
+              >
+                <img src={p.image} alt={p.label} />
+              </button>
+            ))}
+          </div>
           {nameError && <p className="name-error">{nameError}</p>}
           <button type="submit" disabled={!name.trim()}>
             시작하기
@@ -248,33 +271,6 @@ export default function App() {
       <div className="layout">
       <main className="chat">
         <div className="messages">
-          {messages.length === 0 && !pending && !error && (
-            <div className="welcome">
-              <div className="mascot" aria-hidden="true">
-                <img src={yuni} alt="" />
-                <span className="q q1">?</span>
-                <span className="q q2">?</span>
-                <span className="q q3">?</span>
-              </div>
-              <div className="welcome-text">
-                <h2>{displayName}님, 진로 고민 어디서부터 시작할까요?</h2>
-                <p>대화를 통해 나의 선택 기준과 다음 탐색 행동을 함께 정리해요.</p>
-                <div className="starters">
-                  {STARTER_PROMPTS.map((text) => (
-                    <button
-                      key={text}
-                      type="button"
-                      className="starter"
-                      onClick={() => setInput(text)}
-                      disabled={!sessionId}
-                    >
-                      {text}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
           {messages.map((m, idx) =>
             m.role === 'assistant' ? (
               <div key={m.id} className="row assistant">
@@ -355,7 +351,7 @@ export default function App() {
           state={state}
           careerMap={careerMap}
           stale={stale}
-          canSummarize={Boolean(sessionId) && messages.length > 0 && !busy}
+          canSummarize={Boolean(sessionId) && messages.some((m) => m.role === 'user') && !busy}
           summarizing={summarizing}
           summaryError={summaryError}
           onSummarize={handleSummarize}

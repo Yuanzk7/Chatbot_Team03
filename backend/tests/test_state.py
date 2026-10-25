@@ -5,11 +5,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from state import Classification, MergeError, empty_state, format_state, merge, needs_confirmation  # noqa: E402
+from state import Classification, MergeError, empty_state, format_state, merge, needs_confirmation, plan_turn  # noqa: E402
 
 
 def classification(**kw):
-    base = {"preferred_name": None, "new_items": [], "updates": []}
+    base = {
+        "preferred_name": None, "new_items": [], "updates": [],
+        "rapport_category": None, "concern_tags": [], "rapport_answered_ids": [],
+        "rapport_skipped": False, "wants_concern_first": False,
+    }
     base.update(kw)
     return Classification.model_validate(base)
 
@@ -127,11 +131,44 @@ def test_partial_retraction_flags_item_for_confirmation_this_turn_only():
     ]), turn=2, next_id=next_id)
     assert needs_confirmation(state, 2) == ["경제적 독립"]
     assert needs_confirmation(state, 3) == []
-    assert "[이번 턴에 확인이 필요한 항목] 경제적 독립" in format_state(state, 2)
-    assert "이번 턴에 확인이 필요한 항목" not in format_state(state, 3)
-    assert "이번 턴에 확인이 필요한 항목" not in format_state(state)
+    plan = plan_turn(state, classification(), 2)
+    assert plan["question"] == "confirm" and plan["rapport_action"]["type"] == "hold"
+    text = format_state(state, 2, plan)
+    assert "확인하는 질문 하나로 한다" in text and "경제적 독립" in text
+    assert plan_turn(state, classification(), 3)["question"] == "rapport"
+    assert "이번 턴의 질문" not in format_state(state)
 
 
 def test_new_unconfirmed_item_this_turn_is_flagged():
     state, next_id = seeded()  # id 2는 1턴에 unconfirmed로 추가됨
     assert needs_confirmation(state, 1) == ["혼자 문제 해결"]
+
+
+def test_plan_prefers_follow_up_when_user_brings_new_content():
+    state, _ = seeded()
+    result = classification(new_items=[
+        {"kind": "criterion", "text": "재미있게 할 수 있는 일", "evidence": "재밌는 일이 중요해", "status": "confirmed"},
+    ])
+    plan = plan_turn(state, result, 2, current_rapport_id=None)
+    assert plan["question"] == "follow_up" and "재미있게 할 수 있는 일" in plan["new_texts"]
+    assert "후속 질문 하나만" in format_state(state, 2, plan)
+
+
+def test_plan_keeps_rapport_when_new_content_answers_current_question():
+    state, _ = seeded()
+    result = classification(
+        new_items=[{"kind": "criterion", "text": "안정", "evidence": "안정 쪽이요", "status": "confirmed"}],
+        rapport_answered_ids=[34],
+    )
+    assert plan_turn(state, result, 2, current_rapport_id=34)["question"] == "rapport"
+
+
+def test_plan_confirm_beats_follow_up():
+    state, next_id = seeded()
+    state, _ = merge(state, classification(updates=[
+        {"target_id": 1, "text": None, "status": "unconfirmed", "evidence": "모르겠어"},
+    ]), turn=2, next_id=next_id)
+    result = classification(new_items=[
+        {"kind": "experience", "text": "동아리 활동", "evidence": "동아리에서", "status": "confirmed"},
+    ])
+    assert plan_turn(state, result, 2)["question"] == "confirm"

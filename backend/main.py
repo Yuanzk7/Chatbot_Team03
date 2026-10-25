@@ -9,7 +9,9 @@ from pydantic import BaseModel
 from career_map import CareerMapError, build_career_map
 from db import get_db, init_db
 from llm import LLMConfigError, LLMResponseError, classify, generate_reply, summarize
-from state import MergeError, empty_state, merge
+from prompts import PERSONAS
+from state import TONES, MergeError, empty_state, merge, plan_turn
+import rapport
 
 app = FastAPI()
 init_db()
@@ -36,7 +38,9 @@ def load_state(conn, session_id):
         "SELECT state_json, next_item_id FROM session_state WHERE session_id = ?", (session_id,)
     ).fetchone()
     if row:
-        return json.loads(row["state_json"]), row["next_item_id"]
+        state = json.loads(row["state_json"])
+        state.setdefault("rapport", rapport.empty_rapport())  # 이전 버전 상담에는 rapport가 없다
+        return state, row["next_item_id"]
     return empty_state(), 1
 
 
@@ -74,26 +78,46 @@ class MessageRequest(BaseModel):
 
 class SessionRequest(BaseModel):
     preferred_name: str
+    tone: str = "counselor"
 
 
 @app.post("/api/sessions")
 def create_session(request: SessionRequest):
-    """시작 화면에서 받은 이름·호칭으로 상담을 만든다. 챗봇은 호칭을 다시 묻지 않는다."""
+    """시작 화면에서 받은 이름·말투로 상담을 만들고, 윤이의 인사를 첫 메시지(turn 0)로 넣는다."""
     name = request.preferred_name.strip()
     if not name or len(name) > 20:
         raise HTTPException(status_code=422, detail="이름이나 호칭을 1~20자로 입력해 주세요.")
+    if request.tone not in TONES:
+        raise HTTPException(status_code=422, detail="말투는 friend, counselor, spicy 중 하나여야 합니다.")
     session_id = str(uuid.uuid4())
     state = empty_state()
     state["preferred_name"] = name
+    state["tone"] = request.tone
+    greeting = PERSONAS[request.tone]["greeting"]
+    content = greeting["content"].format(name=name)
     conn = get_db()
     conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
     conn.execute(
         "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, 1)",
         (session_id, json.dumps(state, ensure_ascii=False)),
     )
+    cur = conn.execute(
+        "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, 0, 'assistant', ?, ?)",
+        (session_id, content, json.dumps(greeting["suggestions"], ensure_ascii=False)),
+    )
     conn.commit()
     conn.close()
-    return {"session_id": session_id, "preferred_name": name}
+    return {
+        "session_id": session_id,
+        "state": state,
+        "message": {
+            "id": cur.lastrowid,
+            "turn": 0,
+            "role": "assistant",
+            "content": content,
+            "suggestions": greeting["suggestions"],
+        },
+    }
 
 
 @app.get("/api/sessions/{session_id}")
@@ -148,7 +172,12 @@ def send_message(session_id: str, request: MessageRequest):
             # 1) 분류 → 2) 코드 병합 → 3) 갱신된 state로 응답 생성
             result = classify(state, history, content)
             state, next_id = merge(state, result, turn, next_id)
-            reply_text, suggestions = generate_reply(state, history, content, turn)
+            # 서로 알아가기 신호 반영 → 이번 턴의 질문 하나 선택(확인 → 후속 → 라포) → 응답 → 실제로 물은 질문만 asked로
+            cur_before = rapport.current_question(state["rapport"])
+            state["rapport"] = rapport.apply_classification(state["rapport"], result, turn)
+            plan = plan_turn(state, result, turn, cur_before["id"] if cur_before else None)
+            reply_text, suggestions, asked_id = generate_reply(state, history, content, turn, plan)
+            rapport.apply_reply(state["rapport"], plan["rapport_action"], asked_id)
         except LLMConfigError as e:
             raise HTTPException(status_code=500, detail=str(e))
         except openai.AuthenticationError:
@@ -195,7 +224,7 @@ def summarize_session(session_id: str):
     try:
         require_session(conn, session_id)
         rows = load_messages(conn, session_id)
-        if not rows:
+        if not any(r["role"] == "user" for r in rows):
             raise HTTPException(status_code=422, detail="정리할 대화가 아직 없습니다. 먼저 대화를 나눠 주세요.")
         state, _ = load_state(conn, session_id)
         history = [{"role": r["role"], "content": r["content"]} for r in rows]

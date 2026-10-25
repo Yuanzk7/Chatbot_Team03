@@ -7,9 +7,45 @@ const SECTIONS = [
 
 export const STATUS_LABEL = { confirmed: '확인됨', unconfirmed: '미확인', withdrawn: '철회' }
 
+const RAPPORT_LABEL = { pending: '남음', asked: '물어봄', answered: '답함', skipped: '건너뜀' }
+
+// 서로 알아가기(라포 질문) 진행 상황
+function RapportSection({ rapport }) {
+  if (!rapport || (rapport.questions.length === 0 && !rapport.done)) return null
+  const resolved = rapport.questions.filter((q) => q.status === 'answered' || q.status === 'skipped').length
+  return (
+    <section className="rapport">
+      <h3>
+        서로 알아가기
+        {rapport.questions.length > 0 && (
+          <span className="rapport-count">
+            {resolved} / {rapport.questions.length}
+          </span>
+        )}
+      </h3>
+      {rapport.done && (
+        <p className="panel-empty">
+          {rapport.end_reason === 'completed' ? '알아가기를 마치고 진로 탐색으로 넘어갔어요.' : '고민 이야기로 바로 넘어갔어요.'}
+        </p>
+      )}
+      {rapport.questions.length > 0 && (
+        <ul>
+          {rapport.questions.map((q) => (
+            <li key={q.id} className={q.status === 'pending' ? 'unconfirmed' : ''}>
+              <span className={`badge rapport-${q.status}`}>{RAPPORT_LABEL[q.status]}</span>
+              <span className="item-text">{q.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export default function StatePanel({ state }) {
+  const hasRapport = state?.rapport && (state.rapport.questions.length > 0 || state.rapport.done)
   const hasAnything =
-    state && (state.preferred_name || SECTIONS.some(({ key }) => state[key].length > 0))
+    state && (hasRapport || SECTIONS.some(({ key }) => state[key].length > 0))
 
   if (!hasAnything) {
     return <p className="panel-empty">대화를 나누면 확인된 경험, 선택 기준, 제약이 여기에 정리돼요.</p>
@@ -17,6 +53,7 @@ export default function StatePanel({ state }) {
 
   return (
     <div>
+      <RapportSection rapport={state.rapport} />
       {state.preferred_name && (
         <section>
           <h3>호칭</h3>

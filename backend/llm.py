@@ -1,14 +1,14 @@
 import json
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
 from career_map import CareerMapOutput, active_criteria
-from prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
+from prompts import CLASSIFY_PROMPT, PERSONAS, SUMMARY_PROMPT, SYSTEM_PROMPT
 from state import Classification, format_state
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -81,16 +81,22 @@ def summarize(state, history) -> CareerMapOutput:
 class Reply(BaseModel):
     content: str
     suggestions: List[str]
+    asked_question_id: Optional[int]
 
 
 MAX_SUGGESTIONS = 3
 MAX_SUGGESTION_CHARS = 30
 
 
-def generate_reply(state, history, user_message, turn):
-    """갱신된 state를 시스템 프롬프트에 붙여 답변과 예시 답변을 생성한다. (content, suggestions)를 돌려준다."""
+def generate_reply(state, history, user_message, turn, plan):
+    """갱신된 state와 이번 턴의 질문 계획(plan_turn 결과)을 시스템 프롬프트에 붙여 답변을 생성한다.
+    (content, suggestions, asked_question_id)를 돌려준다."""
     reply = _parse(
-        SYSTEM_PROMPT + "\n" + format_state(state, turn),
+        SYSTEM_PROMPT
+        + "\n"
+        + PERSONAS.get(state.get("tone"), PERSONAS["counselor"])["tone"].format(name=state.get("preferred_name") or "사용자")
+        + "\n"
+        + format_state(state, turn, plan),
         _messages(history, user_message),
         Reply,
         "reply",
@@ -103,4 +109,4 @@ def generate_reply(state, history, user_message, turn):
         s = s.strip()
         if s and len(s) <= MAX_SUGGESTION_CHARS and s not in suggestions:
             suggestions.append(s)
-    return content, suggestions[:MAX_SUGGESTIONS]
+    return content, suggestions[:MAX_SUGGESTIONS], reply.asked_question_id

@@ -4,6 +4,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
+from rapport import Category, Tag, choose_action, empty_rapport, format_rapport
+
 Status = Literal["confirmed", "unconfirmed", "withdrawn"]
 KIND_TO_LIST = {"experience": "experiences", "criterion": "criteria", "constraint": "constraints"}
 
@@ -28,17 +30,28 @@ class Classification(BaseModel):
     preferred_name: Optional[str]
     new_items: List[NewItem]
     updates: List[ItemUpdate]
+    # 서로 알아가기(라포) 신호. rapport.apply_classification이 사용한다
+    rapport_category: Optional[Category]
+    concern_tags: List[Tag]
+    rapport_answered_ids: List[int]
+    rapport_skipped: bool
+    wants_concern_first: bool
 
 
 # --- state ---
 
+TONES = ("friend", "counselor", "spicy")  # prompts.PERSONAS의 키와 같다
+
+
 def empty_state():
     return {
         "preferred_name": None,
+        "tone": "counselor",
         "experiences": [],
         "criteria": [],
         "constraints": [],
         "corrections": [],
+        "rapport": empty_rapport(),
     }
 
 
@@ -119,10 +132,55 @@ def needs_confirmation(state, turn):
     return texts
 
 
-def format_state(state, turn=None):
+def plan_turn(state, result: Classification, turn, current_rapport_id=None):
+    """이번 턴에 할 질문을 하나만 고른다. 우선순위: 해석·정정 확인 → 사용자 발언 후속 질문 → 라포 질문.
+    (직접 요청에 먼저 답하는 것은 질문 선택과 별개로 항상 적용된다.)
+    current_rapport_id: 분류 반영 전에 asked 상태였던 라포 질문 id. 그 질문에 답했으면 라포를 이어간다.
+    돌려주는 plan: {"question": "confirm"|"follow_up"|"rapport", "confirm_items": [...], "new_texts": [...],
+                    "rapport_action": {...}}"""
+    confirm_items = needs_confirmation(state, turn)
+    answered_current = current_rapport_id is not None and current_rapport_id in result.rapport_answered_ids
+    new_texts = [n.text for n in result.new_items] + [
+        (u.text or "").strip() for u in result.updates if u.text
+    ]
+    if confirm_items:
+        question = "confirm"
+    elif new_texts and not answered_current:
+        question = "follow_up"  # 사용자가 꺼낸 이야기를 우선한다
+    else:
+        question = "rapport"
+    action = choose_action(state["rapport"], turn, hold=question != "rapport")
+    return {"question": question, "confirm_items": confirm_items, "new_texts": new_texts, "rapport_action": action}
+
+
+def format_turn_plan(plan):
+    """'이번 턴의 질문' 지시. 질문은 한 턴에 하나만."""
+    lines = ["## 이번 턴의 질문 (하나만)"]
+    q = plan["question"]
+    if q == "confirm":
+        lines.append("[이번 턴 질문] 다음 항목은 사용자의 말을 해석한 것이라 뜻이 확실하지 않다: " + "; ".join(plan["confirm_items"]))
+        lines.append(
+            "이번 답변의 질문은 이 해석이 맞는지 확인하는 질문 하나로 한다 "
+            "(예: \"경제적 독립은 중요하지만, 빨리 이룰 필요는 없다는 뜻인가요?\"). 다른 질문은 하지 않는다."
+        )
+    elif q == "follow_up":
+        lines.append("[이번 턴 질문] 사용자가 방금 꺼낸 이야기(새로 드러난 내용: " + "; ".join(plan["new_texts"]) + ")를 되짚고, "
+                     "그 내용을 구체화하는 후속 질문 하나만 한다 (예: 관련 경험, 그렇게 느낀 이유). 다른 질문은 하지 않는다.")
+    else:
+        lines.append("[이번 턴 질문] 위 '서로 알아가기' 지시를 따른다. 지시에 질문이 없으면 사용자의 말에 이어지는 탐색 질문 하나를 한다.")
+    return "\n".join(lines)
+
+
+def format_state(state, turn=None, plan=None):
     """응답 호출의 시스템 프롬프트에 붙일 현재 상태 요약. withdrawn 항목은 활성 목록에서 제외한다.
-    turn을 주면 이번 턴에 미확인이 된 항목을 따로 묶어 확인 질문을 지시한다."""
-    lines = ["## 현재까지 확인한 사용자 정보"]
+    plan(plan_turn 결과)을 주면 '서로 알아가기' 진행과 '이번 턴의 질문' 지시를 함께 붙인다."""
+    lines = []
+    if plan is not None:
+        lines.append(format_rapport(state["rapport"], plan["rapport_action"]))
+        lines.append("")
+        lines.append(format_turn_plan(plan))
+        lines.append("")
+    lines.append("## 현재까지 확인한 사용자 정보")
     lines.append(f"호칭: {state['preferred_name'] or '(아직 확인 안 됨)'}")
     for key, label in _LABELS.items():
         confirmed = [i for i in state[key] if i["status"] == "confirmed"]
@@ -140,11 +198,4 @@ def format_state(state, turn=None):
         "미확인 항목은 확정된 기준처럼 쓰지 말고, 조언에 활용하기 전에 사용자에게 확인한다. "
         "정정 이력에서 withdrawn으로 바뀐 항목은 대화에 남아 있더라도 현재 기준으로 사용하지 않는다."
     )
-    pending = needs_confirmation(state, turn) if turn is not None else []
-    if pending:
-        lines.append("[이번 턴에 확인이 필요한 항목] " + "; ".join(pending))
-        lines.append(
-            "이 항목은 사용자의 말을 해석한 것이라 뜻이 확실하지 않다. 이번 답변의 질문은 이 해석이 맞는지 "
-            "확인하는 질문으로 한다 (예: \"경제적 독립은 중요하지만, 빨리 이룰 필요는 없다는 뜻인가요?\")."
-        )
     return "\n".join(lines)

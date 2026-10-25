@@ -22,10 +22,10 @@ async function request(path, options = {}) {
   return data
 }
 
-export const createSession = (preferredName) =>
+export const createSession = (preferredName, tone) =>
   request('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ preferred_name: preferredName }),
+    body: JSON.stringify({ preferred_name: preferredName, tone }),
   })
 
 export const getSession = (sessionId) => request(`/api/sessions/${sessionId}`)
