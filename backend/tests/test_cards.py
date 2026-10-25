@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import cards as C  # noqa: E402
+from counseling import cards as C  # noqa: E402
 
 
 def test_deck_has_15_unique_cards():

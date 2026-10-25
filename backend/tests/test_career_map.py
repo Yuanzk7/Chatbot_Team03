@@ -5,8 +5,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from career_map import CareerMapError, CareerMapOutput, active_criteria, build_career_map  # noqa: E402
-from state import empty_state  # noqa: E402
+from counseling.career_map import CareerMapError, CareerMapOutput, active_criteria, build_career_map  # noqa: E402
+from counseling.state import empty_state  # noqa: E402
 
 
 def state_with_criteria():

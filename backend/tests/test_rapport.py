@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import rapport as R  # noqa: E402
+from counseling import rapport as R  # noqa: E402
 
 
 def signals(**kw):

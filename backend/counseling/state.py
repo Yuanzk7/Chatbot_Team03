@@ -4,7 +4,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel
 
-from rapport import Category, Tag, choose_action, empty_rapport, format_rapport
+from counseling.rapport import Category, Tag, choose_action, empty_rapport, format_rapport
 
 Status = Literal["confirmed", "unconfirmed", "withdrawn"]
 KIND_TO_LIST = {"experience": "experiences", "criterion": "criteria", "constraint": "constraints"}

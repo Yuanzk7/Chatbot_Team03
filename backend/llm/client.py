@@ -7,11 +7,12 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
-from career_map import CareerMapOutput, active_criteria
-from prompts import CLASSIFY_PROMPT, PERSONAS, SUMMARY_PROMPT, SYSTEM_PROMPT
-from state import Classification, format_state
+from counseling.career_map import CareerMapOutput, active_criteria
+from counseling.state import Classification, format_state
+from llm.personas import PERSONAS
+from llm.prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")  # 프로젝트 루트의 .env
 
 MODEL = os.getenv("OPENAI_MODEL", "")
 REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "")

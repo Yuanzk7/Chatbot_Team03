@@ -4,7 +4,7 @@ import random
 from copy import deepcopy
 from typing import List, Literal, Optional
 
-from cards import DECK_BY_ID, deck_text
+from counseling.cards import DECK_BY_ID, deck_text
 
 Category = Literal["daily", "taste", "relationship", "values", "unist"]
 Tag = Literal["interest", "values", "workstyle", "relationship", "stability", "academic", "future", "daily"]

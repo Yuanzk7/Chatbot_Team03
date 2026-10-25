@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent / "chatbot.db"
+DB_PATH = Path(__file__).resolve().parent.parent / "chatbot.db"  # backend/chatbot.db
 
 
 def get_db():

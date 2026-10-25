@@ -82,4 +82,5 @@ npm run dev
 ## 개발 참고
 
 - `backend/`는 FastAPI + SQLite, `frontend/`는 React + Vite입니다. 대화 기록은 `backend/chatbot.db`에 저장됩니다.
+- 백엔드 폴더: `routes/`(요청 처리), `counseling/`(상담 규칙, 모델 없이 테스트), `llm/`(모델 호출·프롬프트·말투), `storage/`(DB). 프론트 폴더: `screens/`(이름 화면, 상담 화면), `components/`(말풍선, 입력창, 카드, 패널), `styles/`, `assets/`.
 - 상태 병합과 진로맵 조립 로직 테스트: `python -m pytest backend/tests -q`

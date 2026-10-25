@@ -1,9 +1,9 @@
 // 라포 카드 고르기: 라포가 끝나는 턴에 윤이 말풍선 아래에 3장이 뜬다. 한 장만 고른다.
 // 그림 파일(assets/cards/card-<id>.webp)이 있으면 그림을, 없으면 이모지 카드를 보여준다
-const images = import.meta.glob('./assets/cards/card-*.webp', { eager: true, import: 'default' })
+const images = import.meta.glob('../assets/cards/card-*.webp', { eager: true, import: 'default' })
 
 function cardImage(id) {
-  return images[`./assets/cards/card-${id}.webp`] ?? null
+  return images[`../assets/cards/card-${id}.webp`] ?? null
 }
 
 export default function RapportCards({ cards, busy, onChoose, onReshuffle, onDismiss }) {
