@@ -4,6 +4,8 @@ from typing import List, Literal
 
 from pydantic import BaseModel
 
+from counseling.flow import conversation_items, ensure_flow
+
 
 # --- 진로맵 호출 출력 스키마. 선택 기준은 state에서 코드가 채우므로 모델은 후보·행동만 돌려준다 ---
 
@@ -32,11 +34,13 @@ class CareerMapError(Exception):
     """모델 출력이 현재 state와 맞지 않는 경우 (예: 없는 criterion_id)."""
 
 
+# 대화로 다룬 활성 기준만 정리와 비교에 사용한다. 카드 선택만으로 생성된 과거 기준은 제외한다.
 def active_criteria(state):
     """withdrawn을 제외한 선택 기준. 진로맵과 프롬프트에 함께 쓴다."""
+    ensure_flow(state)
     return [
         {"id": i["id"], "text": i["text"], "status": i["status"]}
-        for i in state["criteria"]
+        for i in conversation_items(state, "criteria")
         if i["status"] != "withdrawn"
     ]
 

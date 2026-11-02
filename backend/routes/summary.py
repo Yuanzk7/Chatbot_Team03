@@ -11,6 +11,7 @@ from storage.db import get_db
 router = APIRouter()
 
 
+# 대화로 확인한 기준으로 진로맵을 만든다. 카드 선택만으로 생성된 과거 기준은 요약 입력에서 제외한다.
 @router.post("/api/sessions/{session_id}/summary")
 def summarize_session(session_id: str):
     lock = acquire_session_lock(session_id)
@@ -21,7 +22,7 @@ def summarize_session(session_id: str):
         if not any(r["role"] == "user" for r in rows):
             raise HTTPException(status_code=422, detail="정리할 대화가 아직 없습니다. 먼저 대화를 나눠 주세요.")
         state, _ = load_state(conn, session_id)
-        history, _ = history_and_turn(rows)
+        history, _ = history_and_turn(rows, state)
 
         with llm_errors("정리 결과를 받지 못했습니다. 잠시 후 다시 시도해 주세요.", extra=(CareerMapError,)):
             output = summarize(state, history)

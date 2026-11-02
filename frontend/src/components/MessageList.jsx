@@ -13,7 +13,7 @@ function Avatar() {
   )
 }
 
-// 말풍선 목록. 마지막 윤이 답변 아래에 라포 카드 또는 예시 답변 칩이 붙는다
+// 마지막 답변 아래에 카드 또는 후보를 표시한다. 자유응답 라포·카드 단계에서는 후보 답변을 숨긴다.
 export default function MessageList({
   messages,
   pending,
@@ -21,6 +21,7 @@ export default function MessageList({
   error,
   busy,
   pendingCards,
+  conversationStage,
   onRetry,
   onPickSuggestion,
   onChooseCard,
@@ -28,6 +29,7 @@ export default function MessageList({
   onDismiss,
 }) {
   const bottomRef = useRef(null)
+  const showSuggestions = conversationStage === 'intro' || conversationStage === 'career'
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -53,7 +55,7 @@ export default function MessageList({
                 />
               )}
               {/* 마지막 답변에만 예시 답변 칩을 보여준다. 누르면 입력창에 들어가고 고쳐서 보낼 수 있다 */}
-              {idx === messages.length - 1 && !pending && !pendingCards && m.suggestions?.length > 0 && (
+              {idx === messages.length - 1 && !pending && !pendingCards && showSuggestions && m.suggestions?.length > 0 && (
                 <div className="suggestions">
                   <span className="suggestions-label">예시 답변 · 누르면 입력창에 들어가요</span>
                   {m.suggestions.map((text) => (

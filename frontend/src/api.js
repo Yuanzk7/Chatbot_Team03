@@ -22,10 +22,11 @@ async function request(path, options = {}) {
   return data
 }
 
-export const createSession = (preferredName, tone) =>
+// 말투 선택은 잠시 빼두고 서버의 기본 말투(counselor)로 시작한다.
+export const createSession = (preferredName) =>
   request('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ preferred_name: preferredName, tone }),
+    body: JSON.stringify({ preferred_name: preferredName }),
   })
 
 export const getSession = (sessionId) => request(`/api/sessions/${sessionId}`)

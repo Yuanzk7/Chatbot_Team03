@@ -30,7 +30,7 @@ function RapportSection({ rapport }) {
       )}
       {rapport.cards?.chosen_id && (
         <p className="chosen-card">
-          중심 카드: {rapport.cards.offered.find((c) => c.id === rapport.cards.chosen_id)?.name}
+          고른 카드: {rapport.cards.offered.find((c) => c.id === rapport.cards.chosen_id)?.name}
         </p>
       )}
       {rapport.questions.length > 0 && (
@@ -67,7 +67,7 @@ export default function StatePanel({ state }) {
       )}
 
       {SECTIONS.map(({ key, label }) => {
-        const active = state[key].filter((i) => i.status !== 'withdrawn')
+        const active = state[key].filter((i) => i.status !== 'withdrawn' && i.source !== 'rapport_card')
         if (active.length === 0) return null
         return (
           <section key={key}>

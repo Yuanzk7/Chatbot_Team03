@@ -1,4 +1,4 @@
-"""라포 카드: 고정 덱 15장. 라포가 끝나는 턴에 3장을 제시하고 사용자가 한 장을 고르면 확인된 기준이 된다."""
+"""라포 카드: 고정 덱 15장 중 3장을 제시한다. 선택은 배경정보이며 진로 기준으로 자동 확정하지 않는다."""
 import random
 
 MAX_OFFERED = 3
@@ -8,7 +8,7 @@ def _c(i, emoji, name, tagline, meaning, criterion):
     return {"id": i, "emoji": emoji, "name": name, "tagline": tagline, "meaning": meaning, "criterion": criterion}
 
 
-# tagline: 카드 그림에 들어간 한 줄 (사용자의 말). meaning: 카드 아래에 보여줄 설명. criterion: 상태에 들어갈 기준 문장
+# tagline: 그림의 한 줄. meaning: 카드 설명. criterion: 카드 주제 요약이며 자동 저장할 진로 기준이 아니다.
 DECK = [
     _c(1, "⏳", "시간순삭", "하다 보면 시간이 순삭돼요",
        "하는 과정 자체가 재미있어서 자연스럽게 몰입할 수 있는 일을 찾고 싶어요.", "재미있어서 자연스럽게 몰입하는 일"),

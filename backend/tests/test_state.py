@@ -5,7 +5,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from counseling.state import Classification, MergeError, empty_state, format_state, merge, needs_confirmation, plan_turn  # noqa: E402
+from counseling.controller import needs_confirmation, plan_rapport_turn as plan_turn  # noqa: E402
+from counseling.state import Classification, MergeError, empty_state, format_state, merge  # noqa: E402
 
 
 def classification(**kw):
@@ -13,6 +14,8 @@ def classification(**kw):
         "preferred_name": None, "new_items": [], "updates": [],
         "rapport_category": None, "concern_tags": [], "rapport_answered_ids": [],
         "rapport_skipped": False, "wants_concern_first": False,
+        "request_type": "reflection", "direction_relation": "none", "direction_choice": "none",
+        "needs_reason": False, "follow_up": "reflect", "rapport_consent": False, "concern_provided": False,
     }
     base.update(kw)
     return Classification.model_validate(base)

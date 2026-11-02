@@ -20,7 +20,6 @@ export default function App() {
   // 'loading': 저장된 상담 복원 중, 'name': 이름 입력 화면, 'chat': 상담 화면
   const [screen, setScreen] = useState('loading')
   const [name, setName] = useState('')
-  const [tone, setTone] = useState('counselor')
   const [nameError, setNameError] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -47,13 +46,13 @@ export default function App() {
   const stale = careerMap !== null && lastMessageId > careerMap.based_on_message_id
   const hasUserMessages = messages.some((m) => m.role === 'user')
   const pendingCards =
-    state?.rapport?.cards && state.rapport.cards.chosen_id === null && !state.rapport.cards.dismissed
+    state?.conversation_stage === 'cards' && state?.rapport?.cards && state.rapport.cards.chosen_id === null && !state.rapport.cards.dismissed
       ? state.rapport.cards
       : null
 
-  async function startNewSession(preferredName, selectedTone) {
+  async function startNewSession(preferredName) {
     // 서버가 윤이의 인사를 첫 메시지로 넣어 돌려준다
-    const { session_id, state: newState, message } = await createSession(preferredName, selectedTone)
+    const { session_id, state: newState, message } = await createSession(preferredName)
     localStorage.setItem(STORAGE_KEY, session_id)
     setSessionId(session_id)
     setMessages([message])
@@ -79,7 +78,6 @@ export default function App() {
           setCareerMap(data.career_map)
           setLastMessageId(data.last_message_id)
           setName(data.state.preferred_name ?? '')
-          setTone(data.state.tone ?? 'counselor')
           setScreen('chat')
           return
         } catch (e) {
@@ -98,7 +96,7 @@ export default function App() {
     if (!trimmed) return
     setNameError(null)
     try {
-      await startNewSession(trimmed, tone)
+      await startNewSession(trimmed)
     } catch (err) {
       setNameError(err.message)
     }
@@ -153,12 +151,18 @@ export default function App() {
     }
   }
 
+  // 다시 뽑기는 카드만 갱신하고, 건너뛰기는 서버가 돌려준 상담 시작 메시지까지 함께 반영한다.
   async function handleCardsAction(action) {
     if (busy || !sessionId) return
     setCardBusy(true)
+    setError(null)
     try {
-      const { state: newState } = await action(sessionId)
+      const { state: newState, messages: added = [] } = await action(sessionId)
       setState(newState)
+      if (added.length > 0) {
+        setMessages((prev) => [...prev, ...added])
+        setLastMessageId(added[added.length - 1].id)
+      }
     } catch (e) {
       setError({ message: e.message, retry: null })
     } finally {
@@ -186,9 +190,9 @@ export default function App() {
     setPanelView(null)
     const currentName = (state?.preferred_name || name).trim()
     if (!currentName || !hasUserMessages) return
-    if (!window.confirm('새 대화를 시작할까요? 이름과 말투는 그대로 유지되고, 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
+    if (!window.confirm('새 대화를 시작할까요? 이름은 그대로 유지되고, 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
     try {
-      await startNewSession(currentName, state?.tone ?? tone)
+      await startNewSession(currentName)
     } catch (e) {
       setError({ message: e.message, retry: null })
     }
@@ -218,8 +222,6 @@ export default function App() {
       <NameScreen
         name={name}
         onNameChange={setName}
-        tone={tone}
-        onToneChange={setTone}
         error={nameError}
         onStart={handleStart}
       />
@@ -236,6 +238,7 @@ export default function App() {
         error,
         busy,
         pendingCards,
+        conversationStage: state?.conversation_stage,
         onRetry: handleRetry,
         onPickSuggestion: setInput,
         onChooseCard: handleChooseCard,

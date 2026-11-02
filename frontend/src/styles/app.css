@@ -103,7 +103,7 @@ button.brand-link {
 .name-screen {
   margin: auto;
   width: calc(100% - 32px);
-  max-width: 1000px;
+  max-width: 480px;
   padding: 28px 28px 32px;
   display: flex;
   flex-direction: column;

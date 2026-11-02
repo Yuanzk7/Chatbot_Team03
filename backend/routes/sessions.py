@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from counseling.state import TONES, empty_state
 from llm.personas import PERSONAS
-from routes.common import load_career_map, load_messages, load_state, require_session
+from routes.common import load_career_map, load_controller_events, load_messages, load_state, require_session
 from storage.db import get_db
 
 router = APIRouter()
@@ -16,8 +16,12 @@ router = APIRouter()
 class SessionRequest(BaseModel):
     preferred_name: str
     tone: str = "counselor"
+    # 실험용 상담별 설정. 기본 프롬프트를 유지하고 컨트롤러의 추가 통제 적용 여부만 비교한다.
+    controller_enabled: bool = True
 
 
+# 이름과 기본 말투로 상담을 만들고 통제 활성화 설정과 첫 인사를 함께 저장한다.
+# controller_enabled는 상담별로 보관하므로 다른 상담의 실험 설정에 영향을 주지 않는다.
 @router.post("/api/sessions")
 def create_session(request: SessionRequest):
     """시작 화면에서 받은 이름·말투로 상담을 만들고, 윤이의 인사를 첫 메시지(turn 0)로 넣는다."""
@@ -30,6 +34,7 @@ def create_session(request: SessionRequest):
     state = empty_state()
     state["preferred_name"] = name
     state["tone"] = request.tone
+    state["controller"]["enabled"] = request.controller_enabled
     greeting = PERSONAS[request.tone]["greeting"]
     content = greeting["content"].format(name=name)
     conn = get_db()
@@ -57,18 +62,20 @@ def create_session(request: SessionRequest):
     }
 
 
+# 새로고침 시 대화·상태·진로맵을 복원하고, 개발·평가용 턴별 통제 판정 기록도 반환한다.
 @router.get("/api/sessions/{session_id}")
 def get_session(session_id: str):
     conn = get_db()
     try:
         require_session(conn, session_id)
-        messages = load_messages(conn, session_id)
         state, _ = load_state(conn, session_id)
+        messages = load_messages(conn, session_id, state)
         return {
             "messages": messages,
             "state": state,
-            "career_map": load_career_map(conn, session_id),
+            "career_map": load_career_map(conn, session_id, state),
             "last_message_id": messages[-1]["id"] if messages else 0,
+            "controller_events": load_controller_events(conn, session_id),
         }
     finally:
         conn.close()

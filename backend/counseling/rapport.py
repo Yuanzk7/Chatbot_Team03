@@ -128,6 +128,7 @@ def _finish(rapport, reason, turn):
     rapport["done_turn"] = turn
 
 
+# 동의 후 시작한 라포 질문의 답변·개별 건너뛰기·완료를 반영한다. 전체 중단은 flow에서 상담 전환으로 처리한다.
 def apply_classification(rapport, signals, turn, rng=random):
     """분류 호출 결과(signals: rapport_category, concern_tags, rapport_answered_ids, rapport_skipped,
     wants_concern_first)를 반영한다. 모델이 보고한 id는 이 상담에서 뽑힌 질문에 속할 때만 쓴다."""
@@ -229,6 +230,7 @@ def progress(rapport):
     }
 
 
+# 이번 라포 질문을 안내한다. 예시 답변 없이 자유롭게 답하게 하고, 중단 요청에는 카드 선택을 요구하지 않는다.
 def format_rapport(rapport, action):
     """응답 프롬프트에 붙일 '서로 알아가기' 지시."""
     lines = ["## 서로 알아가기 (라포 질문)"]
@@ -263,13 +265,13 @@ def format_rapport(rapport, action):
     elif t == "concern":
         lines.append(
             "[이번 턴 지시] 사용자가 알아가기 질문 대신 바로 진로 고민으로 들어가길 원한다. 알아가기 질문을 하지 않는다. "
-            "바로 고민으로 가겠다고 짧게 답하고, 그 전에 \"아래 카드 중 지금 가장 나다운 것 하나만 골라 주세요\"라고 안내한다. "
-            "이번 턴에는 질문을 하지 않고 suggestions는 빈 배열로 둔다. asked_question_id는 null. rapport_cards는 빈 배열."
+            "카드 선택도 요구하지 않는다. 이미 말한 고민이 있으면 그 고민부터 답하고, 없으면 현재 진로 고민을 묻는다. "
+            "asked_question_id는 null. rapport_cards는 빈 배열."
         )
     elif t == "hold":
         lines.append("[이번 턴 지시] 알아가기 질문은 이번 턴에 보류한다. 아래 '이번 턴의 질문'을 따른다. asked_question_id는 null.")
     else:
         lines.append("[이번 턴 지시] 알아가기 질문은 하지 않는다. asked_question_id는 null.")
     if t in ("ask", "continue"):
-        lines.append("알아가기 질문을 물을 때는 예시 답변(suggestions)의 마지막을 \"이 질문은 건너뛸게요\"로 둔다.")
+        lines.append("사용자가 직접 생각해서 답하는 라포 단계다. 예시 답변을 제시하지 않고 suggestions는 빈 배열로 둔다.")
     return "\n".join(lines)
