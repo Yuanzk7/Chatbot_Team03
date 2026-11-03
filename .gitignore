@@ -35,3 +35,6 @@ pnpm-debug.log*
 # 설계 문서 (로컬 보관용, 저장소에는 올리지 않음)
 CLAUDE.MD
 docs/
+
+# Cloudflare 팀원 공유 안내 (로컬 보관용)
+/Cloudflare_팀원_공유_가이드.md

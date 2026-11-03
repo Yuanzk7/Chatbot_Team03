@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from counseling.career_map import CareerMapOutput, active_criteria
 from counseling.controller import finalize_reply
-from counseling.state import Classification, format_state
+from counseling.state import Classification, classification_state, format_state
 from llm.personas import PERSONAS
 from llm.prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
 
@@ -71,7 +71,7 @@ def _parse(instructions, messages, text_format, label):
 # 사용자 정보·정정과 함께 요청 유형·탐색 방향·확인 응답을 분류한다. 규칙 판정은 하지 않는다.
 def classify(state, history, user_message) -> Classification:
     """분류 결과는 controller가 상태를 갱신하고 이번 행동을 결정할 때 사용한다."""
-    instructions = CLASSIFY_PROMPT + "\n## 현재 state\n" + json.dumps(state, ensure_ascii=False)
+    instructions = CLASSIFY_PROMPT + "\n## 현재 state\n" + json.dumps(classification_state(state), ensure_ascii=False)
     return _parse(instructions, _messages(history, user_message), Classification, "classify")
 
 

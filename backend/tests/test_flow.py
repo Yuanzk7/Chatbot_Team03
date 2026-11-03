@@ -75,7 +75,7 @@ def test_direct_counseling_skips_questions_and_cards(provided):
     assert state["rapport"]["done"] is True
     assert state["rapport"]["cards"] is None
     assert state["controller"]["pending_card_offer"] is None
-    assert plan["question"] == ("reflect_after_answer" if provided else "career_concern")
+    assert plan["question"] == ("optional" if provided else "career_concern")
     assert bool(plan["fixed_question"]) is (not provided)
 
 
@@ -83,7 +83,7 @@ def test_direct_counseling_skips_questions_and_cards(provided):
 def test_concern_at_intro_enters_career_without_reasking_permission():
     state = empty_state()
     plan = C.plan_turn(state, classified(concern_provided=True), 1)
-    assert plan["question"] == "reflect_after_answer"
+    assert plan["question"] == "optional"
     assert state["conversation_stage"] == "career"
     assert state["career_concern_received"] is True
 
@@ -125,13 +125,13 @@ def test_skip_one_question_keeps_rapport_stage():
     assert state["rapport"]["questions"][0]["status"] == "skipped"
 
 
-# 비교 정보 요청에는 개인화된 추천 자격이 없어도 설명 뒤 열린 질문 하나를 이어간다.
+# 비교 정보 요청에도 필요한 성찰 질문 하나는 허용하며 개인화된 추천 자격과 분리한다.
 def test_comparison_answers_then_asks_one_reflection_question():
     state = career_state()
     plan = C.plan_turn(state, classified(request_type="information", concern_provided=True), 2)
     text = "연구와 실무는 다루는 문제와 결과를 확인하는 방식에 차이가 있어요."
     reply = C.finalize_reply(state, plan, generated(content=text))
-    assert plan["question"] == "reflect_after_answer"
+    assert plan["question"] == "optional"
     assert plan["allow_recommendation"] is False
     assert reply.content.startswith(text)
     assert reply.content.endswith(reply.question)
@@ -139,14 +139,18 @@ def test_comparison_answers_then_asks_one_reflection_question():
     assert reply.suggestions
 
 
-# 모델이 질문만 빠뜨렸을 때 유효한 비교 설명을 버리지 않고 성찰 질문을 보완한다.
-def test_missing_reflection_question_keeps_valid_information():
+# 일반 정보 설명에는 질문을 요구하지 않으며, 질문이 없으면 후보 답변도 함께 숨긴다.
+def test_information_without_question_keeps_valid_information():
     state = career_state()
     plan = C.plan_turn(state, classified(request_type="information"), 2)
     reply = C.finalize_reply(state, plan, generated(question=None, content="비교 설명입니다."))
     assert reply.content.startswith("비교 설명입니다.")
-    assert reply.question is not None
-    assert reply.validation_errors == ["missing_question"]
+    assert reply.question is None
+    assert reply.content == "비교 설명입니다."
+    assert reply.suggestions == []
+    assert reply.validation_errors == []
+    C.complete_turn(state, plan, reply)
+    assert state["controller"]["last_question"] is None
 
 
 # 설명만 요청하거나 대화를 끝내면 모델이 만든 질문·후보를 제거하고 미결 방향 선택은 보존한다.
@@ -170,7 +174,7 @@ def test_card_transition_does_not_reask_known_concern(selected):
     state["conversation_stage"] = "cards"
     state["career_concern_received"] = True
     plan = C.plan_turn(state, None, 5, card=DECK_BY_ID[1] if selected else None, career_entry=not selected)
-    assert plan["question"] == "reflect_after_answer"
+    assert plan["question"] == "optional"
     assert plan["fixed_question"] is None
     assert state["criteria"] == []
 

@@ -91,7 +91,7 @@ def test_general_information_does_not_require_gathering_personal_data():
     state["criteria"] = []
     plan = C.plan_turn(state, signals(request_type="information"), 2)
     assert plan["allow_recommendation"] is False
-    assert plan["question"] == "reflect_after_answer"
+    assert plan["question"] == "optional"
     assert plan["fixed_question"] is None
 
 
@@ -218,6 +218,27 @@ def test_older_relevant_unconfirmed_items_are_asked_one_at_a_time():
     second = C.plan_turn(state, result, 5)
     assert second["confirm_item_ids"] == [4]
     assert state["controller"]["pending_confirmation_ids"] == [4]
+
+
+# 확인 질문은 항목 종류와 해석을 명시해야 하며, 이미 말한 막막함을 일반 의견으로 되묻지 않는다.
+@pytest.mark.parametrize("section,text,context", [
+    ("experiences", "연구 프로젝트 참여", "경험이나 관심 활동"),
+    ("criteria", "새로운 지식 습득", "중요하게 생각"),
+    ("constraints", "졸업 직후 취업", "고려할 조건"),
+])
+def test_confirmation_identifies_the_interpretation(section, text, context):
+    state = state_with_items()
+    state[section] = [item(3, text, "unconfirmed")]
+    plan = C.plan_turn(state, signals(relevant_item_ids=[3]), 4)
+    delivered = C.finalize_reply(state, plan, model_reply(question="다른 의견이 있으신가요?"))
+    assert plan["confirm_item_ids"] == [3]
+    assert text in delivered.question
+    assert context in delivered.question
+    assert "맞나요?" in delivered.question
+    assert "어떻게 생각" not in delivered.question
+    assert "다른 의견" not in delivered.content
+    assert delivered.content.count("?") == 1
+    assert delivered.validation_errors == []
 
 
 # 사용자가 지금 판단을 유보한 항목은 관련 주제가 다시 나와도 같은 내용으로 재촉하지 않는다.
@@ -361,6 +382,15 @@ def test_question_in_content_is_replaced_by_safe_response():
     reply = C.finalize_reply(state, plan, model_reply(content="다른 직업도 궁금하신가요?"))
     assert "question_in_content" in reply.validation_errors
     assert "다른 직업도" not in reply.content
+
+
+# 질문을 생략할 수 있어도 여러 질문을 한꺼번에 물을 수는 없다.
+def test_optional_question_still_rejects_multiple_questions():
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information"), 2)
+    reply = C.finalize_reply(state, plan, model_reply(question="어느 쪽인가요? 이유는 무엇인가요?"))
+    assert "multiple_questions" in reply.validation_errors
+    assert reply.content.count("?") <= 1
 
 
 # 비교 실험에서 통제를 끄면 조건 판정과 방향 카운터 강제를 적용하지 않는다.

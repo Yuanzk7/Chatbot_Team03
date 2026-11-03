@@ -2,7 +2,7 @@ import MessageList from '../components/MessageList.jsx'
 import Composer from '../components/Composer.jsx'
 import SidePanel from '../components/panel/SidePanel.jsx'
 
-// 상담 화면: 헤더 + 말풍선 목록 + 입력창 + (열려 있으면) 우측 패널
+// 상담 화면: 헤더 + 말풍선 목록 + 입력창 + 사용자가 열었을 때의 진로맵.
 export default function ChatScreen({ header, chat, composer, panel }) {
   return (
     <div className="app">
@@ -15,17 +15,10 @@ export default function ChatScreen({ header, chat, composer, panel }) {
           <span className="user-name">{header.displayName}님</span>
           <button
             type="button"
-            className={`secondary panel-toggle${panel.view === 'state' ? ' open' : ''}`}
-            onClick={() => panel.onToggle('state')}
-            aria-pressed={panel.view === 'state'}
-          >
-            기준·제약
-          </button>
-          <button
-            type="button"
-            className={`secondary panel-toggle${panel.view === 'map' ? ' open' : ''}`}
-            onClick={() => panel.onToggle('map')}
-            aria-pressed={panel.view === 'map'}
+            className={`secondary panel-toggle${panel.open ? ' open' : ''}`}
+            onClick={panel.onToggle}
+            aria-expanded={panel.open}
+            aria-controls="career-map-panel"
           >
             진로맵
             {panel.stale && <span className="dot" aria-label="추가 대화 미반영" />}
@@ -41,17 +34,15 @@ export default function ChatScreen({ header, chat, composer, panel }) {
           <MessageList {...chat} />
           <Composer {...composer} />
         </main>
-        {panel.view && (
+        {panel.open && (
           <SidePanel
-            view={panel.view}
-            state={panel.state}
             careerMap={panel.careerMap}
             stale={panel.stale}
             canSummarize={panel.canSummarize}
             summarizing={panel.summarizing}
             summaryError={panel.summaryError}
             onSummarize={panel.onSummarize}
-            onClose={() => panel.onToggle(null)}
+            onClose={panel.onClose}
           />
         )}
       </div>

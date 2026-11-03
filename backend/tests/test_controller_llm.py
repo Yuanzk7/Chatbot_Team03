@@ -94,6 +94,22 @@ def test_generate_information_reply_without_personal_items(monkeypatch):
     assert result.validation_errors == []
 
 
+# 질문 생략을 별도로 요청하지 않아도 일반 상담의 유효한 설명을 그대로 전달해야 한다.
+@pytest.mark.parametrize("request_type", ["information", "reflection"])
+def test_normal_reply_can_finish_without_follow_up_question(monkeypatch, request_type):
+    state = career_state()
+    plan = plan_turn(state, classification(request_type=request_type), 1)
+    content = "말씀하신 두 부분을 함께 살펴볼 수 있어요."
+    model = Mock(return_value=reply(content=content, suggestions=["데이터부터", "분석부터"]))
+    monkeypatch.setattr(client, "_parse", model)
+    result = client.generate_reply(state, [], "데이터와 분석 방법", 1, plan)
+    assert result.content == content
+    assert result.question is None
+    assert result.suggestions == []
+    assert result.validation_errors == []
+    assert model.call_count == 1
+
+
 # 모델이 금지된 추천을 반환해도 재호출 없이 질문으로 바뀌고 검증 실패 이유가 남는다.
 def test_generate_reply_rejects_forbidden_recommendation_without_extra_call(monkeypatch):
     state = career_state()
@@ -135,6 +151,24 @@ def test_missing_question_fallback_records_delivered_rapport_question(monkeypatc
     assert result.asked_question_id == 17
     assert state["rapport"]["questions"][0]["asks"] == 1
     assert result.question == state["rapport"]["questions"][0]["text"]
+
+
+# 모델이 지정 라포 질문 하나를 본문에도 똑같이 복사했으면 오류 응답으로 바꾸지 않고 한 번만 전달한다.
+def test_identical_rapport_question_in_both_fields_is_delivered_once(monkeypatch):
+    state = career_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"].update(done=False, done_turn=None)
+    question = "지금까지 가장 재미있었던 경험은 무엇인가요?"
+    state["rapport"]["questions"] = [dict(id=17, text=question, status="pending", asks=0, holds=0)]
+    plan = plan_turn(state, classification(), 1)
+    monkeypatch.setattr(client, "_parse", Mock(return_value=reply(
+        content=question, question=question, asked_question_id=17)))
+    result = client.generate_reply(state, [], "네", 1, plan)
+    apply_reply(state["rapport"], plan["rapport_action"], result.asked_question_id)
+    assert result.content == question
+    assert result.question == question
+    assert result.validation_errors == []
+    assert state["rapport"]["questions"][0]["asks"] == 1
 
 
 # 추천 설명에 다른 질문을 숨겨 본문·질문 분리를 우회하는 응답도 차단한다.
@@ -182,8 +216,10 @@ def test_chosen_card_prompt_uses_current_criterion_status_and_text(status):
     prompt = format_state(state)
     assert "[라포에서 선택한 카드 — 배경정보]" in prompt
     assert "[중심 기준 카드]" not in prompt
-    assert "사용자의 실제 발언처럼 인용하지 않는다" in prompt
+    assert "카드 이름: 과거 해석" in prompt
     if status == "withdrawn":
-        assert "id 9: 수정한 기준" not in prompt
+        assert "[확인된 선택 기준] 없음" in prompt
+        assert "[미확인 선택 기준] 없음" in prompt
+        assert "[철회한 정보 (withdrawn)] id 9: 수정한 기준" in prompt
     else:
         assert "id 9: 수정한 기준" in prompt

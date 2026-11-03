@@ -1,6 +1,6 @@
-import { STATUS_LABEL } from './StatePanel.jsx'
+const STATUS_LABEL = { confirmed: '확인됨', unconfirmed: '미확인', withdrawn: '철회' }
 
-// 진로맵 탭: '현재까지 정리하기' 버튼과 결과(선택 기준·후보 비교·다음 탐색 행동)
+// 진로맵: '현재까지 정리하기' 버튼과 결과(선택 기준·후보 비교·다음 탐색 행동).
 export default function CareerMapView({
   careerMap,
   stale,
@@ -85,18 +85,17 @@ export default function CareerMapView({
             )}
           </section>
 
-          <section>
-            <h3>내가 선택한 행동</h3>
-            {selected.length === 0 ? (
-              <p className="panel-empty">아직 직접 고른 행동이 없어요. 대화에서 해보고 싶은 행동을 정해 보세요.</p>
-            ) : (
+          {/* 대화에서 직접 해보기로 한 일이 있을 때만 보여준다. */}
+          {selected.length > 0 && (
+            <section>
+              <h3>내가 해보기로 한 일</h3>
               <ul className="actions">
                 {selected.map((a) => (
                   <li key={a.text}>{a.text}</li>
                 ))}
               </ul>
-            )}
-          </section>
+            </section>
+          )}
 
           {proposed.length > 0 && (
             <section>

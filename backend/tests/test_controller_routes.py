@@ -373,7 +373,7 @@ def test_skip_intro_enters_counseling_without_offering_cards(database, monkeypat
     assert response["state"]["conversation_stage"] == "career"
     assert response["state"]["rapport"]["cards"] is None
     assert response["message"]["content"].endswith("지금 진로와 관련해서 어떤 고민이 있으신가요?")
-    assert "카드 선택을 짧게 받아들이" not in parsed.call_args.args[0]
+    assert "카드 선택을 짧게 받아들이고" not in parsed.call_args.args[0]
 
 
 # 라포 중 진로 고민을 함께 말하며 중단하면 일반적인 고민 질문을 다시 하지 않고 그 고민부터 다룬다.
@@ -388,7 +388,7 @@ def test_stop_rapport_with_actual_concern_does_not_reask_it(database, monkeypatc
     assert response["state"]["conversation_stage"] == "career"
     assert response["state"]["rapport"]["cards"] is None
     assert all(q["status"] == "skipped" for q in response["state"]["rapport"]["questions"])
-    assert response["state"]["controller"]["last_question"]["type"] == "reflect_after_answer"
+    assert response["state"]["controller"]["last_question"]["type"] == "optional"
     assert "지금 진로와 관련해서 어떤 고민이 있으신가요?" not in response["message"]["content"]
     assert response["message"]["suggestions"]
 
@@ -470,7 +470,7 @@ def test_legacy_card_criterion_and_map_are_filtered_without_rewriting_database(s
         assert "conversation_stage" not in raw
 
 
-# 정보 요청에도 성찰 질문을 이어가되, 설명만 요청하거나 대화를 끝내려는 의도는 별도로 존중한다.
+# 모델이 필요한 후속 질문을 골라도 명시적인 질문 생략·종료 요청은 우선한다.
 @pytest.mark.parametrize("follow_up,has_question", [("reflect", True), ("answer_only", False), ("close", False)])
 def test_information_follow_up_intent_survives_full_route(session_id, monkeypatch, follow_up, has_question):
     scripted_models(monkeypatch, [flow_classification(request_type="information", follow_up=follow_up)])
@@ -479,3 +479,20 @@ def test_information_follow_up_intent_survives_full_route(session_id, monkeypatc
     assert bool(response["state"]["controller"]["last_question"]) is has_question
     assert ("?" in response["message"]["content"]) is has_question
     assert bool(restored["messages"][-1]["suggestions"]) is has_question
+
+
+# 일반 상담에서 모델이 질문 없이 충분히 답하면 저장·복원 과정에서도 임의의 질문을 붙이지 않는다.
+def test_information_without_question_survives_save_and_restore(session_id, monkeypatch):
+    content = "데이터 구성과 분석 방법을 함께 살펴보면 연구 질문을 검증하는 과정을 이해할 수 있어요."
+    parsed = Mock(side_effect=[flow_classification(request_type="information"),
+                               client.Reply(content=content, question=None, suggestions=["데이터부터"],
+                                            asked_question_id=None, rapport_cards=[], basis_ids=[], recommendations=[])])
+    monkeypatch.setattr(client, "_parse", parsed)
+    response = messages.send_message(session_id, messages.MessageRequest(
+        content="데이터와 분석 방법", request_id="explain-both"))
+    restored = sessions.get_session(session_id)
+    assert response["message"]["content"] == content
+    assert restored["messages"][-1]["content"] == content
+    assert restored["messages"][-1]["suggestions"] == []
+    assert restored["state"]["controller"]["last_question"] is None
+    assert restored["controller_events"][-1]["decision"]["validation_errors"] == []

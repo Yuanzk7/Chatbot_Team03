@@ -84,7 +84,7 @@ def test_withdraw_keeps_item_and_excludes_from_active_summary():
     summary = format_state(state)
     assert "[확인된 선택 기준] 없음" in summary
     assert "[미확인 선택 기준] 없음" in summary
-    assert "withdrawn" in summary  # 정정 이력에는 남는다
+    assert "[철회한 정보 (withdrawn)] id 1:" in summary
 
 
 def test_text_change_records_before_after():

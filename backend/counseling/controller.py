@@ -55,6 +55,15 @@ def _items(state):
     return {i["id"]: i for i in conversation_items(state)}
 
 
+# 경험·기준·제약 중 무엇을 해석했는지 밝힌다. 막연한 의견 대신 해석이 맞는지 확인한다.
+def _confirmation_question(state, item):
+    if any(i["id"] == item["id"] for i in conversation_items(state, "criteria")):
+        return f"진로를 고를 때 ‘{item['text']}’도 중요하게 생각하신다고 이해했는데, 맞나요?"
+    if any(i["id"] == item["id"] for i in conversation_items(state, "constraints")):
+        return f"진로 선택에서 고려할 조건이 ‘{item['text']}’라고 이해했는데, 맞나요?"
+    return f"경험이나 관심 활동을 ‘{item['text']}’로 이해했는데, 맞나요?"
+
+
 # 같은 해석을 반복 확인하지 않도록 항목 내용과 마지막 정정 턴을 버전으로 사용한다.
 def _item_version(state, item):
     changed = max([item["turn"]] + [c["turn"] for c in state["corrections"]
@@ -165,14 +174,14 @@ def _finish_plan(state, plan):
     elif action == "concern":
         enter_career(state, plan["turn"])
         plan["rapport_action"] = {"type": "none", "question": None}
-        plan["question"] = "reflect_after_answer" if state["career_concern_received"] else "career_concern"
+        plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
     plan["conversation_stage"] = state["conversation_stage"]
     return plan
 
 
 # 동의·중단·카드 선택으로 단계를 전환하고, 세 통제 규칙과 이번 질문 하나를 결정한다.
-# 정보 요청의 답변 유형과 후속 질문 여부는 별개이며, 종료·설명만 요청하면 질문을 생략한다.
+# 일반 상담의 후속 질문은 선택이다. 라포·해석 확인·방향 점검 등 필요한 질문만 필수로 지정한다.
 def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_entry=False):
     """state는 아직 저장하지 않은 상담 상태, result는 LLM 분류, turn은 대화 쌍의 번호다.
     card/career_entry는 카드 UI에서 들어온 이벤트로, 탐색 횟수를 증가시키지 않는다.
@@ -196,7 +205,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
         plan["triggered_rules"].append("recommendation_gate")
     if card or career_entry:
         enter_career(state, turn, reason="card_selected" if card else "cards_dismissed")
-        plan["question"] = "reflect_after_answer" if state["career_concern_received"] else "career_concern"
+        plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
         return _finish_plan(state, plan)
     stage = state["conversation_stage"]
@@ -218,7 +227,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
             plan["rapport_action"] = _hold_rapport(state, turn)
         return _finish_plan(state, plan)
     if before_stage != "career" and stage == "career":
-        plan["question"] = "reflect_after_answer" if state["career_concern_received"] else "career_concern"
+        plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
         return _finish_plan(state, plan)
     direction = controller["direction"]
@@ -234,7 +243,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
         item = _items(state)[pending[0]]
         plan["triggered_rules"].append("confirm_interpretation")
         plan.update(question="confirm", confirm_items=[item["text"]], confirm_item_ids=[item["id"]],
-                    fixed_question=f"‘{item['text']}’에 대해 지금은 어떻게 생각하시나요?")
+                    fixed_question=_confirmation_question(state, item))
     elif enabled and stage == "career" and result.request_type == "recommendation" and not experiences:
         plan.update(question="gather_experience", fixed_question="지금까지 재미있었던 경험이나 해보고 싶은 활동은 무엇인가요?")
     elif enabled and stage == "career" and result.request_type == "recommendation" and not criteria:
@@ -245,7 +254,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
     elif enabled and stage == "career" and direction["needs_clarification"]:
         plan.update(question="clarify_direction", fixed_question="어떤 분야나 활동을 중심으로 더 탐색해 보고 싶으신가요?")
     elif stage == "career":
-        plan["question"] = "reflect_after_answer"
+        plan["question"] = "optional"
     else:
         if controller["pending_card_offer"]:
             plan["rapport_action"] = {"type": controller["pending_card_offer"], "question": None}
@@ -257,39 +266,30 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
     return _finish_plan(state, plan)
 
 
-# 응답 모델에 허용된 근거·질문·제한을 전달한다. 내부 판정 정보는 사용자에게 보여주지 않는다.
+# 응답 모델에는 이번 단계·허용 근거·질문 방식만 전달한다. 공통 대화 원칙은 prompts.py에 둔다.
 def format_turn_plan(plan):
-    lines = ["## 이번 턴의 질문 (하나만)"]
+    lines = ["## 이번 턴의 질문", f"대화 단계: {plan.get('conversation_stage', 'rapport')}"]
     if plan.get("controller_enabled"):
         lines.extend([
-            "개인화된 설명의 근거는 confirmed 항목만 사용한다. allowed_basis_ids=" + str(plan["allowed_basis_ids"]),
-            f"개인화된 후보 추천 허용={plan['allow_recommendation']}. 요청 유형={plan['request_type']}.",
-            "추천 허용이 false면 recommendations는 빈 배열이다. 일반 정보 요청에는 사실 설명으로 답한다.",
-            "개인화된 추천은 사용자 요청이 recommendation일 때만 recommendations에 따로 쓴다.",
-            "content에는 추천이나 미확인 동기·적성 판단을 섞지 않는다. 사회적 통념으로 이유를 추측하지 않는다.",
+            f"요청 유형={plan['request_type']}, 개인화된 추천 허용={plan['allow_recommendation']}.",
+            f"허용 근거 id={plan['allowed_basis_ids']}, 경험 id={plan['experience_ids']}, 기준 id={plan['criterion_ids']}.",
         ])
-    if plan.get("conversation_stage") in ("rapport", "cards"):
-        lines.append("이 단계는 자유응답 라포·카드 단계다. 예시 답변을 유도하지 말고 suggestions는 빈 배열로 둔다.")
-    if plan["question"] == "career_concern":
-        if plan.get("card"):
-            lines.append("카드 선택을 짧게 받아들이되, 선택 이유나 과거 경험을 추가로 묻지 않는다.")
-        lines.append(
-            "이제 본격적으로 진로 이야기를 듣는 전환이다. 알아가기나 카드 선택을 요구하지 않는다. "
-            "고르지 않은 카드를 골랐다고 말하지 않는다. 사용자가 현재 가진 진로 고민을 먼저 듣는다."
-        )
+    if plan.get("conversation_stage") in ("intro", "rapport", "cards"):
+        lines.append("suggestions는 빈 배열이다. 시작 안내의 두 선택지는 코드가 붙인다.")
+    if plan.get("card") and plan["question"] == "career_concern":
+        lines.append("카드 선택을 짧게 받아들이고 현재 진로 고민을 듣는다.")
     if plan.get("fixed_question"):
-        lines.append("질문은 코드가 다음 문장으로 붙인다. content에는 질문 없이 짧게 답하고 question은 null로 둔다: "
-                     + plan["fixed_question"])
+        lines.append("질문은 코드가 붙인다. 먼저 요청에 답하고 question은 null: " + plan["fixed_question"])
     elif plan["question"] == "confirm":
         lines.append("다음 해석을 확인하는 질문 하나로 한다: " + "; ".join(plan["confirm_items"]))
     elif plan["question"] == "follow_up":
         lines.append("새 이야기(" + "; ".join(plan["new_texts"]) + ")를 구체화하는 후속 질문 하나만 question에 쓴다.")
-    elif plan["question"] == "reflect_after_answer":
-        lines.append("사용자가 요청한 정보·비교에는 먼저 2~3문장으로 명확하게 답한다. 그다음 현재 고민·경험을 구체화하는 열린 질문 하나를 question에 쓴다. 이미 말한 고민을 처음부터 다시 묻거나 카드에 억지로 연결하지 않는다.")
+    elif plan["question"] == "optional":
+        lines.append("질문은 선택이다. 설명으로 충분하면 question=null. 답에 따라 진로 판단이나 다음 탐색이 달라질 때만 하나 묻는다.")
     elif plan["question"] == "none":
-        lines.append("추가 질문 없이 사용자의 요청에 답하거나 카드 선택을 안내한다. question은 null이다.")
+        lines.append("추가 질문 없이 답한다. question=null.")
     else:
-        lines.append("위 '서로 알아가기' 지시를 따른다. 라포가 끝났으면 탐색 질문 하나를 question에 쓴다.")
+        lines.append("지정된 라포 질문을 따른다.")
     return "\n".join(lines)
 
 
@@ -300,6 +300,9 @@ def finalize_reply(state, plan, reply):
     """
     errors = []
     content = reply.content.strip()
+    # 같은 질문만 두 필드에 중복한 경우는 조립 단계에서 한 번만 표시한다. 다른 본문 질문은 계속 검사한다.
+    if content == (reply.question or "").strip():
+        content = ""
     recommendations = reply.recommendations
     used_ids = set(reply.basis_ids)
     if plan["controller_enabled"]:
@@ -320,9 +323,10 @@ def finalize_reply(state, plan, reply):
     if any(not c.candidate.strip() or not c.reason.strip() for c in recommendations):
         errors.append("empty_recommendation")
     question = plan.get("fixed_question") or (reply.question or "").strip() or None
+    requires_question = plan["question"] not in ("none", "optional")
     if plan["question"] == "none":
         question = None
-    if plan["controller_enabled"] and plan["question"] != "none" and not question:
+    if plan["controller_enabled"] and requires_question and not question:
         errors.append("missing_question")
     if question and (question.count("?") + question.count("？") > 1):
         errors.append("multiple_questions")
@@ -337,7 +341,7 @@ def finalize_reply(state, plan, reply):
     elif errors:
         content = "말씀하신 내용부터 차근차근 살펴볼게요."
         question = plan.get("fixed_question")
-        if plan["question"] != "none" and not question:
+        if requires_question and not question:
             action_q = plan["rapport_action"].get("question")
             question = (action_q["text"] if action_q else "지금 이야기에서 가장 중요하게 느끼는 점은 무엇인가요?")
             # 코드가 원래 라포 질문을 직접 전달했다면 실제로 물은 질문으로 기록한다.

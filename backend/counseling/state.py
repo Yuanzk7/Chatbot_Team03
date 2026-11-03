@@ -47,7 +47,7 @@ class Classification(BaseModel):
     relevant_item_ids: List[int] = Field(default_factory=list)
     deferred_item_ids: List[int] = Field(default_factory=list)
     needs_reason: bool
-    # 대화의 내용과 다음 질문 여부를 분리한다. 정보 요청도 성찰 질문으로 이어질 수 있다.
+    # reflect는 상담을 이어간다는 뜻이며 일반 후속 질문을 강제하지 않는다.
     follow_up: Literal["reflect", "answer_only", "close"]
     rapport_consent: bool
     concern_provided: bool
@@ -140,6 +140,28 @@ def merge(state, result: Classification, turn, next_id):
 _LABELS = {"experiences": "경험·관심 활동", "criteria": "선택 기준", "constraints": "현실적 제약"}
 
 
+# 분류에 필요한 현재 항목·질문·탐색 방향만 전달한다. 정정 원본과 내부 카운터는 DB 상태에 보관한다.
+def classification_state(state):
+    stage = ensure_flow(state)
+    rapport = state["rapport"]
+    controller = state["controller"]
+    return {
+        "preferred_name": state["preferred_name"],
+        "conversation_stage": stage,
+        **{key: [{field: item[field] for field in ("id", "text", "status")}
+                 for item in conversation_items(state, key)] for key in _LABELS},
+        "rapport": {
+            "category": rapport["category"], "done": rapport["done"],
+            "questions": [{field: q[field] for field in ("id", "text", "status")}
+                          for q in rapport["questions"]] if stage == "rapport" else [],
+        },
+        "controller": {
+            "direction": {key: controller["direction"][key] for key in ("label", "awaiting_choice")},
+            "last_question": controller["last_question"],
+        },
+    }
+
+
 # 확인 상태별로 사용자 정보를 요약하고, 컨트롤러가 고른 이번 턴의 계획을 응답 모델에 전달한다.
 def format_state(state, turn=None, plan=None):
     """응답 호출의 시스템 프롬프트에 붙일 현재 상태 요약. withdrawn 항목은 활성 목록에서 제외한다.
@@ -147,10 +169,10 @@ def format_state(state, turn=None, plan=None):
     ensure_flow(state)
     lines = []
     if plan is not None:
-        lines.append(format_rapport(state["rapport"], plan["rapport_action"]))
-        lines.append("")
+        rapport_text = format_rapport(state["rapport"], plan["rapport_action"])
+        if rapport_text:
+            lines.append(rapport_text)
         lines.append(format_turn_plan(plan))
-        lines.append("")
     lines.append("## 현재까지 확인한 사용자 정보")
     lines.append(f"호칭: {state['preferred_name'] or '(아직 확인 안 됨)'}")
     for key, label in _LABELS.items():
@@ -161,24 +183,12 @@ def format_state(state, turn=None, plan=None):
             "; ".join(f"id {i['id']}: {i['text']}" for i in confirmed) if confirmed else "없음"))
         lines.append(f"[미확인 {label}] " + (
             "; ".join(f"id {i['id']}: {i['text']}" for i in unconfirmed) if unconfirmed else "없음"))
-    if state["corrections"]:
-        lines.append("[정정 이력]")
-        for c in state["corrections"]:
-            lines.append(
-                f"- {c['turn']}턴: \"{c['before']['text']}\" {c['before']['status']} → "
-                f"\"{c['after']['text']}\" {c['after']['status']}"
-            )
+    withdrawn = [i for i in conversation_items(state) if i["status"] == "withdrawn"]
+    if withdrawn:
+        lines.append("[철회한 정보 (withdrawn)] " + "; ".join(f"id {i['id']}: {i['text']}" for i in withdrawn))
     cards = state.get("rapport", {}).get("cards")
     if cards and cards.get("chosen_id"):
         chosen = next((c for c in cards["offered"] if c["id"] == cards["chosen_id"]), None)
         if chosen:
-            lines.append(
-                f"[라포에서 선택한 카드 — 배경정보] {chosen['name']}: {chosen['meaning']}. "
-                "선택했다는 사실만 기억한다. 카드의 설명을 사용자의 실제 발언처럼 인용하지 않는다. "
-                "현재 고민에 직접 도움이 될 때만 참고하고, 매번 언급하거나 진로 기준·동기·적성을 확정하지 않는다."
-            )
-    lines.append(
-        "미확인 항목은 확정된 기준처럼 쓰지 말고, 조언에 활용하기 전에 사용자에게 확인한다. "
-        "정정 이력에서 withdrawn으로 바뀐 항목은 대화에 남아 있더라도 현재 기준으로 사용하지 않는다."
-    )
+            lines.append(f"[라포에서 선택한 카드 — 배경정보] {chosen['name']}: {chosen['meaning']}")
     return "\n".join(lines)

@@ -23,15 +23,15 @@ export default function App() {
   const [nameError, setNameError] = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
-  // 현재까지 확인한 기준·제약 (서버가 매 턴 갱신해 돌려준다)
+  // 서버가 갱신하는 상담 상태. 호칭, 대화 단계와 카드 표시 여부를 판단한다.
   const [state, setState] = useState(null)
   // 정리 결과(진로맵)와 마지막 메시지 id. 둘을 비교해 '추가 대화 미반영'을 판단한다
   const [careerMap, setCareerMap] = useState(null)
   const [lastMessageId, setLastMessageId] = useState(0)
   const [summarizing, setSummarizing] = useState(false)
   const [summaryError, setSummaryError] = useState(null)
-  // 우측 패널에 무엇을 보여줄지: null(닫힘) | 'state'(기준·제약) | 'map'(진로맵)
-  const [panelView, setPanelView] = useState(null)
+  // 사용자가 진로맵을 열었는지 관리한다. 내부 상담 기록은 별도 화면으로 표시하지 않는다.
+  const [mapOpen, setMapOpen] = useState(false)
   const [input, setInput] = useState('')
   // 전송 중인 사용자 메시지 { content, requestId }
   const [pending, setPending] = useState(null)
@@ -58,6 +58,7 @@ export default function App() {
     setMessages([message])
     setState(newState)
     setCareerMap(null)
+    setMapOpen(false)
     setLastMessageId(message.id)
     setSummaryError(null)
     setPending(null)
@@ -187,7 +188,7 @@ export default function App() {
   // CareerMate 제목 클릭: 이름 화면을 거치지 않고 같은 이름으로 첫 채팅 화면으로 간다
   async function handleHome() {
     if (busy) return
-    setPanelView(null)
+    setMapOpen(false)
     const currentName = (state?.preferred_name || name).trim()
     if (!currentName || !hasUserMessages) return
     if (!window.confirm('새 대화를 시작할까요? 이름은 그대로 유지되고, 현재 상담은 이 브라우저에서 더 이상 열 수 없습니다.')) return
@@ -207,6 +208,7 @@ export default function App() {
     setMessages([])
     setState(null)
     setCareerMap(null)
+    setMapOpen(false)
     setLastMessageId(0)
     setError(null)
     setNameError(null)
@@ -247,9 +249,9 @@ export default function App() {
       }}
       composer={{ value: input, onChange: setInput, onSubmit: handleSubmit, disabled: !sessionId || busy }}
       panel={{
-        view: panelView,
-        onToggle: (v) => setPanelView((cur) => (v === null || cur === v ? null : v)),
-        state,
+        open: mapOpen,
+        onToggle: () => setMapOpen((cur) => !cur),
+        onClose: () => setMapOpen(false),
         careerMap,
         stale,
         canSummarize: Boolean(sessionId) && hasUserMessages && !busy,

@@ -230,48 +230,22 @@ def progress(rapport):
     }
 
 
-# 이번 라포 질문을 안내한다. 예시 답변 없이 자유롭게 답하게 하고, 중단 요청에는 카드 선택을 요구하지 않는다.
+# 실제로 진행 중인 라포 질문이나 카드 제시에 필요한 지시만 전달한다. 완료 후에는 생략한다.
 def format_rapport(rapport, action):
-    """응답 프롬프트에 붙일 '서로 알아가기' 지시."""
-    lines = ["## 서로 알아가기 (라포 질문)"]
-    p = progress(rapport)
-    if rapport["questions"]:
-        lines.append(f"진행: 답함 {p['answered']}, 건너뜀 {p['skipped']}, 남음 {p['remaining']} (최대 {MAX_QUESTIONS}개)")
     t = action["type"]
+    if t in ("none", "hold"):
+        return ""
+    lines = ["## 서로 알아가기"]
     q = action.get("question")
-    if t == "ask":
-        lines.append(
-            f"[이번 턴 지시] 사용자의 말을 되짚은 뒤, 다음 질문을 자연스럽게 하나만 묻는다 (id {q['id']}): \"{q['text']}\" "
-            "사용자가 직접 질문을 했으면 먼저 답하고 이 질문은 다음 턴으로 미뤄도 된다. "
-            f"물었으면 asked_question_id에 {q['id']}를, 묻지 않았으면 null을 적는다."
-        )
-    elif t == "continue":
-        lines.append(
-            f"[이번 턴 지시] 직전에 물은 질문 (id {q['id']}) \"{q['text']}\"에 사용자가 아직 답하지 않았다. "
-            "사용자의 직접 요청이 있으면 먼저 처리한다. 그다음 같은 문장을 반복하지 말고, 답할 기회를 주거나 넘어가도 되는지 가볍게 묻는다. "
-            f"다시 물었으면 asked_question_id에 {q['id']}를, 아니면 null을 적는다."
-        )
+    if t in ("ask", "continue"):
+        lines.append(f"지정 질문 (id {q['id']}): {q['text']}")
+        if t == "continue":
+            lines.append("아직 답하지 않은 질문이다. 같은 문장을 반복하지 말고 답할 기회나 건너뛰기를 안내한다.")
+        lines.append(f"지정 질문을 말투에 맞게 바꾸어 question에만 쓰고 asked_question_id={q['id']}로 둔다. 별도 답변이 없으면 content는 빈 문자열이다. 직접 요청에 먼저 답하느라 미루면 question과 asked_question_id 모두 null이다.")
     elif t == "wrap_up":
-        lines.append(
-            "[이번 턴 지시] 알아가기 단계가 끝났다. 지금까지 알게 된 사용자의 경험과 기준을 2~3문장으로 되짚은 뒤, "
-            "\"아래 카드 중 지금 가장 나다운 것 하나를 골라 주세요\"라고 안내한다. 이번 턴에는 질문을 하지 않고 suggestions는 빈 배열로 둔다. "
-            "asked_question_id는 null."
-        )
-        lines.append(
-            "rapport_cards: 아래 카드 15장 중 지금까지의 대화에서 근거가 있는 카드를 최대 3장 고른다. 각 카드에 근거가 된 사용자 발언을 짧게 인용한다. "
-            "근거가 있는 카드가 3장이 안 되면 있는 만큼만 적는다. 근거 없이 채우지 않는다."
-        )
+        lines.append("알아가기 단계가 끝났다. 경험과 기준을 짧게 되짚고 아래 카드 중 하나를 고르도록 안내한다.")
+        lines.append("rapport_cards는 대화 근거가 있는 카드를 최대 3장 고르고 evidence에 사용자 발언을 짧게 인용한다. 근거 없이 채우지 않는다.")
         lines.append(deck_text())
     elif t == "concern":
-        lines.append(
-            "[이번 턴 지시] 사용자가 알아가기 질문 대신 바로 진로 고민으로 들어가길 원한다. 알아가기 질문을 하지 않는다. "
-            "카드 선택도 요구하지 않는다. 이미 말한 고민이 있으면 그 고민부터 답하고, 없으면 현재 진로 고민을 묻는다. "
-            "asked_question_id는 null. rapport_cards는 빈 배열."
-        )
-    elif t == "hold":
-        lines.append("[이번 턴 지시] 알아가기 질문은 이번 턴에 보류한다. 아래 '이번 턴의 질문'을 따른다. asked_question_id는 null.")
-    else:
-        lines.append("[이번 턴 지시] 알아가기 질문은 하지 않는다. asked_question_id는 null.")
-    if t in ("ask", "continue"):
-        lines.append("사용자가 직접 생각해서 답하는 라포 단계다. 예시 답변을 제시하지 않고 suggestions는 빈 배열로 둔다.")
+        lines.append("알아가기를 중단하고 카드 없이 진로 상담으로 전환한다. 이미 말한 고민이 있으면 답하고, 없으면 현재 고민을 묻는다.")
     return "\n".join(lines)
