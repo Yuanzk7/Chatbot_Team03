@@ -5,6 +5,7 @@ from typing import List, Literal
 from pydantic import BaseModel
 
 from counseling.flow import conversation_items, ensure_flow
+from counseling.exploration import map_actions
 
 
 # --- 진로맵 호출 출력 스키마. 선택 기준은 state에서 코드가 채우므로 모델은 후보·행동만 돌려준다 ---
@@ -76,7 +77,7 @@ def build_career_map(state, output: CareerMapOutput, last_message_id):
     return {
         "criteria": criteria,
         "candidates": candidates,
-        "next_actions": next_actions,
+        "next_actions": map_actions(state, next_actions),
         "based_on_message_id": last_message_id,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }

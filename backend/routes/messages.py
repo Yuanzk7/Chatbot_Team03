@@ -30,14 +30,15 @@ def send_message(session_id: str, request: MessageRequest):
         raise HTTPException(status_code=422, detail="메시지가 비어 있습니다.")
 
     lock = acquire_session_lock(session_id)
-    conn = get_db()
+    conn = None
     try:
+        conn = get_db()
         require_session(conn, session_id)
         state, next_id = load_state(conn, session_id)
 
         # request_id 중복 확인 (lock 안에서 수행)
         dup = conn.execute(
-            "SELECT session_id, turn, content FROM messages WHERE request_id = ?",
+            "SELECT session_id, turn, content FROM messages WHERE request_id = $1",
             (request.request_id,),
         ).fetchone()
         if dup:
@@ -45,7 +46,7 @@ def send_message(session_id: str, request: MessageRequest):
                 raise HTTPException(status_code=409, detail="같은 요청 ID로 다른 내용이 전송되었습니다.")
             reply = conn.execute(
                 "SELECT id, turn, role, content, suggestions FROM messages "
-                "WHERE session_id = ? AND turn = ? AND role = 'assistant'",
+                "WHERE session_id = $1 AND turn = $2 AND role = 'assistant'",
                 (session_id, dup["turn"]),
             ).fetchone()
             return {"message": message_dict(reply), "state": state}
@@ -55,7 +56,7 @@ def send_message(session_id: str, request: MessageRequest):
         with llm_errors(extra=(MergeError,)):
             # 1) 분류 → 2) 상태 병합 → 3) 규칙 판정 → 4) 검증된 응답 생성
             result = classify(state, history, content)
-            state, next_id = merge(state, result, turn, next_id)
+            state, next_id = merge(state, result, turn, next_id, user_message=content)
             # 라포 진행과 세 통제 규칙이 서로 다른 질문을 내지 않도록 컨트롤러가 한 계획으로 조정한다.
             cur_before = rapport.current_question(state["rapport"])
             plan = plan_turn(state, result, turn, cur_before["id"] if cur_before else None)
@@ -71,7 +72,7 @@ def send_message(session_id: str, request: MessageRequest):
 
         # 모델 처리에 성공한 경우에만 메시지·상태·판정 로그를 한 트랜잭션으로 저장한다.
         conn.execute(
-            "INSERT INTO messages (session_id, turn, role, content, request_id) VALUES (?, ?, 'user', ?, ?)",
+            "INSERT INTO messages (session_id, turn, role, content, request_id) VALUES ($1, $2, 'user', $3, $4)",
             (session_id, turn, content, request.request_id),
         )
         message = insert_assistant(conn, session_id, turn, reply.content, reply.suggestions)
@@ -80,5 +81,6 @@ def send_message(session_id: str, request: MessageRequest):
         conn.commit()
         return {"message": message, "state": state}
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
         lock.release()

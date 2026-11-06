@@ -1,4 +1,4 @@
-"""실제 SQLite에 저장하되 모델 호출은 대체해, 통제 상태와 대화가 함께 저장되는지 검증한다."""
+"""선택한 테스트 DB에 저장하되 모델 호출은 대체해, 통제 상태와 대화가 함께 저장되는지 검증한다."""
 import json
 import re
 import sqlite3
@@ -12,21 +12,16 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from counseling import cards as card_deck  # noqa: E402
+from counseling import exploration  # noqa: E402
+from counseling.career_map import CareerMapOutput  # noqa: E402
 from counseling.controller import ControlledReply  # noqa: E402
 from counseling.flow import INTRO_SUGGESTIONS  # noqa: E402
 from counseling.state import Classification  # noqa: E402
 from llm import client  # noqa: E402
 from llm.client import LLMResponseError  # noqa: E402
-from routes import cards, messages, sessions  # noqa: E402
-from routes.common import load_state, save_state  # noqa: E402
+from routes import cards, messages, sessions, summary  # noqa: E402
+from routes.common import acquire_session_lock, load_state, save_state  # noqa: E402
 from storage import db  # noqa: E402
-
-
-# 각 테스트를 임시 DB에서 실행해 실제 상담 기록을 건드리지 않는다.
-@pytest.fixture
-def database(tmp_path, monkeypatch):
-    monkeypatch.setattr(db, "DB_PATH", tmp_path / "chatbot.db")
-    db.init_db()
 
 
 # 라포가 끝난 새 상담을 만들어 순수한 진로 탐색 턴의 저장 동작을 검증할 준비를 한다.
@@ -78,6 +73,23 @@ def stub_models(monkeypatch, result=None):
     monkeypatch.setattr(messages, "classify", classify_mock)
     monkeypatch.setattr(messages, "generate_reply", reply_mock)
     return classify_mock, reply_mock
+
+
+# DB 접속이 실패해도 상담 잠금이 풀려, 다음 요청이 계속 409로 막히지 않는다.
+@pytest.mark.parametrize("module,handler,kwargs", [
+    (messages, messages.send_message, {"request": messages.MessageRequest(content="상담", request_id="outage")}),
+    (summary, summary.summarize_session, {}),
+    (cards, cards.choose_card, {"request": cards.CardChoiceRequest(card_id=1)}),
+    (cards, cards.reshuffle_cards, {}),
+    (cards, cards.dismiss_cards, {}),
+])
+def test_database_connection_failure_releases_session_lock(monkeypatch, module, handler, kwargs):
+    session_id = "db-outage-" + handler.__name__
+    monkeypatch.setattr(module, "get_db", Mock(side_effect=ConnectionError("일시적인 연결 실패")))
+    with pytest.raises(ConnectionError):
+        handler(session_id, **kwargs)
+    lock = acquire_session_lock(session_id)
+    lock.release()
 
 
 # 정상 응답이 저장될 때 대화 두 개·방향 카운터·판정 로그가 함께 남는지 확인한다.
@@ -154,7 +166,7 @@ def test_old_session_is_backfilled_without_rewriting_on_read(session_id):
     assert restored["state"]["controller"]["enabled"] is True
     assert restored["state"]["controller"]["direction"]["turns"] == 0
     with db.get_db() as conn:
-        raw = conn.execute("SELECT state_json FROM session_state WHERE session_id = ?", (session_id,)).fetchone()
+        raw = conn.execute("SELECT state_json FROM session_state WHERE session_id = $1", (session_id,)).fetchone()
         assert "controller" not in json.loads(raw["state_json"])
 
 
@@ -360,7 +372,7 @@ def test_intro_and_consent_persist_free_text_rapport(database, monkeypatch):
     assert response["message"]["suggestions"] == []
     assert restored["messages"][-1]["suggestions"] == []
     with db.get_db() as conn:
-        stored = conn.execute("SELECT suggestions FROM messages WHERE id = ?", (response["message"]["id"],)).fetchone()
+        stored = conn.execute("SELECT suggestions FROM messages WHERE id = $1", (response["message"]["id"],)).fetchone()
         assert json.loads(stored["suggestions"]) == []
 
 
@@ -434,13 +446,13 @@ def test_legacy_rapport_suggestions_are_hidden_on_restore(session_id):
         state["rapport"].update(done=False, done_turn=None, questions=[
             {"id": 17, "status": "asked", "text": "경험", "asks": 1}])
         save_state(conn, session_id, state, next_id)
-        conn.execute("UPDATE messages SET suggestions = ? WHERE session_id = ?",
+        conn.execute("UPDATE messages SET suggestions = $1 WHERE session_id = $2",
                      (json.dumps(["기존 답변1", "기존 답변2", "기존 답변3"]), session_id))
     restored = sessions.get_session(session_id)
     assert restored["state"]["conversation_stage"] == "rapport"
     assert restored["messages"][-1]["suggestions"] == []
     with db.get_db() as conn:
-        raw = conn.execute("SELECT suggestions FROM messages WHERE session_id = ?", (session_id,)).fetchone()
+        raw = conn.execute("SELECT suggestions FROM messages WHERE session_id = $1", (session_id,)).fetchone()
         assert len(json.loads(raw["suggestions"])) == 3
 
 
@@ -453,19 +465,19 @@ def test_legacy_card_criterion_and_map_are_filtered_without_rewriting_database(s
         state["rapport"]["cards"] = {**card_deck.new_cards([card], "conversation", 1), "chosen_id": 12}
         state["criteria"] = [dict(id=1, text=card["criterion"], status="confirmed", turn=2, evidence="원본 발언")]
         save_state(conn, session_id, state, 2)
-        conn.execute("INSERT INTO messages (session_id, turn, role, content) VALUES (?, 2, 'user', ?)",
+        conn.execute("INSERT INTO messages (session_id, turn, role, content) VALUES ($1, 2, 'user', $2)",
                      (session_id, f"'{card['name']}' 카드를 골랐어요. ({card['meaning']})"))
         career_map = {"criteria": [{"id": 1, "text": card["criterion"], "status": "confirmed"}],
                       "candidates": [{"name": "연구", "source": "user", "by_criteria": [{"criterion_id": 1, "note": "비교"}]}],
                       "next_actions": [], "based_on_message_id": 1, "updated_at": "2026-11-02T00:00:00Z"}
-        conn.execute("INSERT INTO career_maps (session_id, map_json, based_on_message_id) VALUES (?, ?, 1)",
+        conn.execute("INSERT INTO career_maps (session_id, map_json, based_on_message_id) VALUES ($1, $2, 1)",
                      (session_id, json.dumps(career_map)))
     restored = sessions.get_session(session_id)
     assert restored["state"]["criteria"][0]["source"] == "rapport_card"
     assert restored["career_map"]["criteria"] == []
     assert restored["career_map"]["candidates"][0]["by_criteria"] == []
     with db.get_db() as conn:
-        raw = json.loads(conn.execute("SELECT state_json FROM session_state WHERE session_id = ?", (session_id,)).fetchone()[0])
+        raw = json.loads(conn.execute("SELECT state_json FROM session_state WHERE session_id = $1", (session_id,)).fetchone()["state_json"])
         assert "source" not in raw["criteria"][0]
         assert "conversation_stage" not in raw
 
@@ -496,3 +508,92 @@ def test_information_without_question_survives_save_and_restore(session_id, monk
     assert restored["messages"][-1]["suggestions"] == []
     assert restored["state"]["controller"]["last_question"] is None
     assert restored["controller_events"][-1]["decision"]["validation_errors"] == []
+
+
+# 진행 분류에 필요한 무변경 필드를 채워 테스트가 실제 API 스키마를 사용하도록 한다.
+def exploration_signals(**changes):
+    fields = dict(concern=None, focus=None, conditions="unchanged", defer=None, candidates=[], actions=[])
+    fields.update(changes)
+    return fields
+
+
+# 제안 → 명시적 선택 → 진로맵까지 동일한 행동 ID와 사용자 선택을 저장·복원한다.
+def test_exploration_decision_survives_message_summary_and_restore(session_id, monkeypatch):
+    first = classification(direction_relation="new", direction_label="대학원",
+                           exploration=exploration_signals(concern="석사에서 무엇을 배울까", focus="action"))
+    decision = "이번 주에 연구실 논문을 찾아볼게요"
+    second = classification(direction_relation="same", direction_label=None,
+                            exploration=exploration_signals(actions=[dict(action_id=1, text=None,
+                                                       status="selected", evidence=decision)]))
+    proposed = client.Reply(content="배움을 확인할 작은 탐색을 해볼 수 있어요.", question=None,
+                            suggestions=[], asked_question_id=None, rapport_cards=[], basis_ids=[], recommendations=[],
+                            exploration=dict(compared_candidates=[], proposed_actions=["연구실 논문 찾아보기"]))
+    accepted = client.Reply(content="해보기로 한 내용을 기억할게요.", question=None, suggestions=[],
+                            asked_question_id=None, rapport_cards=[], basis_ids=[], recommendations=[])
+    mapped = CareerMapOutput(candidates=[], next_actions=[dict(text="연구실 논문 찾아보기", selected=False),
+                                                        dict(text="재학생에게 물어보기", selected=True)])
+    model = Mock(side_effect=[first, proposed, second, accepted, mapped])
+    monkeypatch.setattr(client, "_parse", model)
+    response = messages.send_message(session_id, messages.MessageRequest(content="무엇부터 해볼까", request_id="propose"))
+    assert "연구실 논문 찾아보기" in response["message"]["content"]
+    assert response["state"]["exploration"]["actions"][0]["status"] == "proposed"
+    messages.send_message(session_id, messages.MessageRequest(content=decision, request_id="select"))
+    result = summary.summarize_session(session_id)
+    restored = sessions.get_session(session_id)
+    assert result["career_map"]["next_actions"] == [dict(text="연구실 논문 찾아보기", selected=True),
+                                                   dict(text="재학생에게 물어보기", selected=False)]
+    assert [a["status"] for a in restored["state"]["exploration"]["actions"]] == ["selected", "proposed"]
+    assert restored["career_map"] == result["career_map"]
+    assert model.call_count == 5  # 메시지당 분류·답변 2번, 정리 버튼 1번.
+
+
+# 사용자 결정을 메모리에 반영했더라도 응답 생성이 실패하면 결정과 메시지를 함께 취소한다.
+def test_failed_reply_does_not_save_exploration_decision(session_id, monkeypatch):
+    with db.get_db() as conn:
+        state, next_id = load_state(conn, session_id)
+        exploration.record_summary(state, [dict(text="논문 읽기", selected=False)], 0)
+        save_state(conn, session_id, state, next_id)
+    before = sessions.get_session(session_id)
+    text = "논문을 읽어볼게요"
+    classified = classification(direction_relation="none", direction_label=None,
+                                exploration=exploration_signals(actions=[dict(action_id=1, text=None,
+                                                           status="selected", evidence=text)]))
+    monkeypatch.setattr(client, "_parse", Mock(side_effect=[classified, LLMResponseError("실패")]))
+    with pytest.raises(HTTPException):
+        messages.send_message(session_id, messages.MessageRequest(content=text, request_id="failed-choice"))
+    after = sessions.get_session(session_id)
+    assert after["state"] == before["state"]
+    assert after["messages"] == before["messages"]
+
+
+# 진로맵 저장 뒤 상태 저장이 실패해도 지도와 제안 기록 모두 이전 상태로 남아야 한다.
+def test_summary_storage_failure_rolls_back_map_and_action_records(session_id, monkeypatch):
+    stub_models(monkeypatch)
+    messages.send_message(session_id, messages.MessageRequest(content="대학원 탐색", request_id="prepare"))
+    before = sessions.get_session(session_id)
+    monkeypatch.setattr(summary, "summarize", Mock(return_value=CareerMapOutput(
+        candidates=[], next_actions=[dict(text="논문 읽기", selected=False)])))
+    monkeypatch.setattr(summary, "save_state", Mock(side_effect=sqlite3.OperationalError("저장 실패")))
+    with pytest.raises(sqlite3.OperationalError):
+        summary.summarize_session(session_id)
+    after = sessions.get_session(session_id)
+    assert after["state"] == before["state"]
+    assert after["career_map"] == before["career_map"]
+
+
+# 이전 상담의 진로맵에 있던 선택은 복원하되, 조회만으로 원본 상태 JSON을 수정하지 않는다.
+def test_legacy_exploration_restores_existing_map_actions_without_writing(session_id):
+    with db.get_db() as conn:
+        state, next_id = load_state(conn, session_id)
+        state.pop("exploration")
+        save_state(conn, session_id, state, next_id)
+        old_map = dict(criteria=[], candidates=[], next_actions=[dict(text="연구실 알아보기", selected=True)],
+                       based_on_message_id=1, updated_at="2026-11-06T00:00:00Z")
+        conn.execute("INSERT INTO career_maps (session_id, map_json, based_on_message_id) VALUES ($1, $2, 1)",
+                     (session_id, json.dumps(old_map)))
+    restored = sessions.get_session(session_id)
+    assert restored["state"]["exploration"]["actions"][0]["status"] == "selected"
+    assert restored["career_map"] == old_map
+    with db.get_db() as conn:
+        raw = json.loads(conn.execute("SELECT state_json FROM session_state WHERE session_id=$1", (session_id,)).fetchone()["state_json"])
+        assert "exploration" not in raw

@@ -23,6 +23,7 @@ SYSTEM_PROMPT = """\
 - basis_ids: 개인화된 설명에 사용한 confirmed 항목 id. 일반 정보와 직접 표현한 고민을 받아주는 데는 빈 배열.
 - recommendations: 사용자가 추천을 요청하고 이번 턴에 허용됐을 때만 작성한다. 후보마다 confirmed 경험·관심 활동과 선택 기준이 각각 1개 이상 필요하다. candidate, reason, basis_ids로 쓰며 추천을 content·question에 숨기지 않는다.
 - asked_question_id는 실제 물은 지정 라포 질문 id, 그 외 null. rapport_cards는 카드 제시 지시가 있을 때만 채우고 그 외 빈 배열.
+- exploration은 진로 상담에만 사용한다. compared_candidates에는 본문에서 실제 비교한 후보명을 현재 후보와 같은 명칭으로, proposed_actions에는 제안할 작은 탐색 행동만 넣는다. 행동은 코드가 표시하므로 본문에 반복하지 않는다. 해당 내용이 없으면 null.
 """
 
 CLASSIFY_PROMPT = """\
@@ -45,6 +46,11 @@ CLASSIFY_PROMPT = """\
 - relevant_item_ids: 이번 조언·질문에 관련 있는 기존 항목 id. deferred_item_ids: 이번에 확인을 유보·건너뛴 항목 id. 직전 confirm의 item_ids를 참고하며 방향 선택 유보와 혼동하지 않는다.
 - needs_reason: 진로를 원한다고 명시했으나 이유·경험이 아직 없어 이를 물을 필요가 있을 때만 true. 단순 검토·정보 요청이나 이미 설명한 이유에는 false. 동기를 추측해 항목으로 만들지 않는다.
 
+## 상담 진행 (exploration)
+- 진로 고민·후보·행동·진행 요청이 있을 때만 채우고 그 외 null. concern은 새 고민을 제시하거나 바꿀 때만 채우고, 같은 고민의 반복·세부 정보 질문은 null이다. focus는 명시적으로 기준(criteria)·조건(conditions)·비교(comparison)·행동(action)을 다루자고 했을 때만 지정한다.
+- conditions는 실제 조건 확인이 필요하다고 말하면 needed, 특별한 제약이 없다고 명시하면 not_needed, 그 외 unchanged. defer는 사용자가 미룬 단계이며 단순한 정보 질문은 건너뛰기가 아니다.
+- candidates는 사용자가 실제로 언급한 진로 선택지의 추가·제외와 발언 인용이다. actions는 구체적인 탐색 행동을 직접 하겠다고 정하거나 철회했을 때만 작성한다. 제안·관심·질문만으로 selected로 만들지 않는다. 기존 행동은 action_id를 사용하고, 짧은 동의는 action_confirmation_id가 있을 때만 그 행동에 연결한다.
+
 ## 라포
 - rapport_consent: 시작 안내의 알아가기 질문에 동의했으면 true.
 - wants_concern_first: 알아가기·카드 대신 진로 상담을 원하면 true. 질문 하나만 넘기겠다는 뜻은 rapport_skipped만 true.
@@ -59,4 +65,5 @@ SUMMARY_PROMPT = """\
 - candidates: 대화에 등장한 후보만 포함한다. source는 사용자가 먼저 언급하면 user, 챗봇이 먼저 소개하면 assistant. 후보가 없으면 빈 배열.
 - by_criteria: 주어진 criterion_id만 사용한다. 대화나 신뢰할 만한 일반 지식으로 뒷받침되는 특징을 한 문장으로 쓰고, 근거가 없으면 생략한다. 사용자에게 적합하다는 판단은 하지 않는다.
 - next_actions: 사용자가 직접 해보겠다고 정한 일만 selected=true. 제안만 한 일은 false. 행동 대화가 없으면 현재 조건에서 가능한 작은 탐색 행동을 최대 3개 false로 제안할 수 있다. 각 행동은 구체적인 한 문장이며 특정 직업·기업에 지원하도록 지시하지 않는다.
+- 상담 진행 기록에 있는 행동은 원문대로 유지한다. 선택 여부는 코드가 사용자 결정 기록으로 확인한다.
 """

@@ -5,6 +5,7 @@
 """
 from dataclasses import dataclass, field
 
+from counseling import exploration
 from counseling.flow import (
     INTRO_QUESTION, apply_input, conversation_items, ensure_flow, enter_career, suggestions_for_stage,
 )
@@ -24,6 +25,7 @@ class ControlledReply:
     validation_errors: list[str] = field(default_factory=list)
     used_basis_ids: list[int] = field(default_factory=list)
     question: str | None = None
+    exploration: dict | None = None
 
 
 # 상담별 통제 설정과 진행 상태를 만든다. 대화의 turn 번호와 탐색 횟수는 별개다.
@@ -177,6 +179,7 @@ def _finish_plan(state, plan):
         plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
     plan["conversation_stage"] = state["conversation_stage"]
+    plan["exploration"] = exploration.plan_turn(state, plan)
     return plan
 
 
@@ -201,6 +204,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
             "allow_recommendation": bool(experiences and criteria) if enabled else True,
             "allowed_basis_ids": sorted(confirmed), "experience_ids": experiences, "criterion_ids": criteria,
             "fixed_question": None, "triggered_rules": [], "card": card}
+    plan["follow_up"] = result.follow_up if result else "reflect"
     if enabled and not plan["allow_recommendation"]:
         plan["triggered_rules"].append("recommendation_gate")
     if card or career_entry:
@@ -290,6 +294,8 @@ def format_turn_plan(plan):
         lines.append("추가 질문 없이 답한다. question=null.")
     else:
         lines.append("지정된 라포 질문을 따른다.")
+    if context := exploration.format_plan(plan.get("exploration")):
+        lines.append(context)
     return "\n".join(lines)
 
 
@@ -326,10 +332,15 @@ def finalize_reply(state, plan, reply):
     requires_question = plan["question"] not in ("none", "optional")
     if plan["question"] == "none":
         question = None
+    if plan.get("exploration") and not plan["exploration"]["allow_question"]:
+        question = None
     if plan["controller_enabled"] and requires_question and not question:
         errors.append("missing_question")
     if question and (question.count("?") + question.count("？") > 1):
         errors.append("multiple_questions")
+    metadata = None
+    if not errors:
+        content, metadata = exploration.prepare_reply(plan.get("exploration"), reply, content)
     if not content and not question and not recommendations:
         errors.append("empty_reply")
     fallback_rapport_id = None
@@ -339,6 +350,7 @@ def finalize_reply(state, plan, reply):
         question = action_q["text"] if action_q else "지금 이야기에서 가장 고민되는 점은 무엇인가요?"
         fallback_rapport_id = action_q["id"] if action_q else None
     elif errors:
+        metadata = None
         content = "말씀하신 내용부터 차근차근 살펴볼게요."
         question = plan.get("fixed_question")
         if requires_question and not question:
@@ -371,7 +383,7 @@ def finalize_reply(state, plan, reply):
             asked_id = reply.asked_question_id
     picks = reply.rapport_cards if not errors and action["type"] == "wrap_up" else []
     suggestions = suggestions_for_stage(state, suggestions, has_question=bool(question))
-    return ControlledReply(content, suggestions[:3], asked_id, picks, sorted(set(errors)), sorted(used_ids), question)
+    return ControlledReply(content, suggestions[:3], asked_id, picks, sorted(set(errors)), sorted(used_ids), question, metadata)
 
 
 # 실제로 전달한 질문만 기록한다. 이후 DB 저장이 실패하면 이 변경도 저장되지 않는다.
@@ -387,6 +399,7 @@ def complete_turn(state, plan, reply):
                 controller["pending_confirmation_ids"].remove(item_id)
     if plan["rapport_action"]["type"] in ("wrap_up", "concern"):
         controller["pending_card_offer"] = None
+    exploration.complete_turn(state, plan, reply)
 
 
 # 턴별 판정을 JSON으로 묶어 어떤 규칙이 작동했고 어떤 응답을 보냈는지 비교할 수 있게 한다.
@@ -396,4 +409,5 @@ def decision_record(state, plan, reply):
             "triggered_rules": plan["triggered_rules"], "question": plan["question"],
             "allow_recommendation": plan["allow_recommendation"], "direction": dict(state["controller"]["direction"]),
             "confirm_item_ids": plan.get("confirm_item_ids", []), "used_basis_ids": reply.used_basis_ids,
-            "validation_errors": reply.validation_errors}
+            "validation_errors": reply.validation_errors,
+            "exploration_focus": state.get("exploration", {}).get("focus")}

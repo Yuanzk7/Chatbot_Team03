@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from counseling.career_map import CareerMapOutput, active_criteria
 from counseling.controller import finalize_reply
+from counseling.exploration import ExplorationOutput, classification_context
 from counseling.state import Classification, classification_state, format_state
 from llm.personas import PERSONAS
 from llm.prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
@@ -82,6 +83,8 @@ def summarize(state, history) -> CareerMapOutput:
         SUMMARY_PROMPT
         + "\n## 선택 기준\n"
         + json.dumps(active_criteria(state), ensure_ascii=False)
+        + "\n## 상담 진행·행동 기록\n"
+        + json.dumps(classification_context(state), ensure_ascii=False)
     )
     return _parse(instructions, history, CareerMapOutput, "summary")
 
@@ -106,6 +109,7 @@ class Reply(BaseModel):
     rapport_cards: List[CardPick]
     basis_ids: List[int]
     recommendations: List[Recommendation]
+    exploration: Optional[ExplorationOutput] = None
 
 
 # 컨트롤러 계획을 모델에 전달하고, 근거 검증·고정 질문 조립까지 마친 응답 객체를 반환한다.

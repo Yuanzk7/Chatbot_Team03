@@ -7,13 +7,40 @@
 - llm/         모델 호출과 프롬프트, 윤이의 말투
 - storage/     데이터베이스
 """
+from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from routes import cards, messages, sessions, summary
 from storage.db import init_db
 
-app = FastAPI()
-init_db()
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
-for module in (sessions, messages, cards, summary):
-    app.include_router(module.router)
+
+# 서버 시작 시 DB를 준비한다. 모듈을 읽거나 테스트 앱을 만드는 것만으로 DB를 변경하지 않는다.
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    yield
+
+
+# Render가 서버의 실행 상태를 확인한다. 모델 API 호출 없이 응답한다.
+def health():
+    return {"status": "ok"}
+
+
+# API를 먼저 등록하고 빌드된 화면이 있으면 같은 주소에서 제공한다.
+# 로컬 개발에서는 기존 Vite 서버를 그대로 사용할 수 있다.
+def create_app(frontend_dir=FRONTEND_DIST):
+    app = FastAPI(lifespan=lifespan)
+    for module in (sessions, messages, cards, summary):
+        app.include_router(module.router)
+    app.add_api_route("/health", health, methods=["GET"])
+    if frontend_dir.is_dir():
+        app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    return app
+
+
+app = create_app()

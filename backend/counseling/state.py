@@ -4,6 +4,8 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from counseling import exploration
+from counseling.exploration import ExplorationInput
 from counseling.controller import empty_controller, format_turn_plan
 from counseling.flow import conversation_items, ensure_flow
 from counseling.rapport import Category, Tag, empty_rapport, format_rapport
@@ -51,6 +53,7 @@ class Classification(BaseModel):
     follow_up: Literal["reflect", "answer_only", "close"]
     rapport_consent: bool
     concern_provided: bool
+    exploration: Optional[ExplorationInput] = None
 
 
 # --- state ---
@@ -71,6 +74,7 @@ def empty_state():
         "corrections": [],
         "rapport": empty_rapport(),
         "controller": empty_controller(),
+        "exploration": exploration.empty_exploration(),
     }
 
 
@@ -80,7 +84,7 @@ class MergeError(Exception):
 
 # 분류 결과를 기존 상태의 복사본에 병합하고 항목 ID와 정정 이력을 관리한다.
 # 아직 DB에는 저장하지 않으므로, 뒤의 응답 생성이 실패하면 이 변경은 버려진다.
-def merge(state, result: Classification, turn, next_id):
+def merge(state, result: Classification, turn, next_id, user_message=None):
     """분류 결과를 state에 병합한다. (새 state, 다음 항목 id)를 돌려준다.
     항목은 삭제하지 않는다. 정정은 text·status를 바꾸고 corrections에 전후 값을 남긴다."""
     state = deepcopy(state)
@@ -132,6 +136,7 @@ def merge(state, result: Classification, turn, next_id):
         })
         next_id += 1
 
+    exploration.update(state, result, turn, user_message)
     return state, next_id
 
 
@@ -148,6 +153,7 @@ def classification_state(state):
     return {
         "preferred_name": state["preferred_name"],
         "conversation_stage": stage,
+        "exploration": exploration.classification_context(state),
         **{key: [{field: item[field] for field in ("id", "text", "status")}
                  for item in conversation_items(state, key)] for key in _LABELS},
         "rapport": {

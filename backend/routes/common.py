@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from counseling import cards as card_deck
 from counseling.controller import ensure_controller
+from counseling.exploration import ensure_exploration
 from counseling.flow import ensure_flow, history_for_model, suggestions_for_stage, without_card_criteria
 from counseling.rapport import empty_rapport
 from counseling.state import empty_state
@@ -29,7 +30,7 @@ def acquire_session_lock(session_id):
 
 # 전달받은 상담 ID가 DB에 있는지 검사해 다른 처리 전에 잘못된 요청을 404로 중단한다.
 def require_session(conn, session_id):
-    row = conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    row = conn.execute("SELECT 1 FROM sessions WHERE id = $1", (session_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="상담을 찾을 수 없습니다.")
 
@@ -39,7 +40,7 @@ def require_session(conn, session_id):
 def load_state(conn, session_id):
     """(state, next_item_id). 아직 없으면 빈 상태."""
     row = conn.execute(
-        "SELECT state_json, next_item_id FROM session_state WHERE session_id = ?", (session_id,)
+        "SELECT state_json, next_item_id FROM session_state WHERE session_id = $1", (session_id,)
     ).fetchone()
     if row:
         state = json.loads(row["state_json"])
@@ -51,12 +52,18 @@ def load_state(conn, session_id):
             if chosen:
                 old_text = f"'{chosen['name']}' 카드를 골랐어요. ({chosen.get('meaning', '')})"
                 selection = conn.execute(
-                    "SELECT turn FROM messages WHERE session_id = ? AND role = 'user' AND content = ?",
+                    "SELECT turn FROM messages WHERE session_id = $1 AND role = 'user' AND content = $2",
                     (session_id, old_text),
                 ).fetchone()
                 if selection:
                     cards["selected_turn"] = selection["turn"]
         ensure_flow(state)
+        legacy_actions = []
+        if "exploration" not in state:
+            old_map = conn.execute("SELECT map_json FROM career_maps WHERE session_id = $1", (session_id,)).fetchone()
+            if old_map:
+                legacy_actions = json.loads(old_map["map_json"]).get("next_actions", [])
+        ensure_exploration(state, legacy_actions)
         return state, row["next_item_id"]
     return empty_state(), 1
 
@@ -64,7 +71,7 @@ def load_state(conn, session_id):
 # 상담 상태와 다음 항목 ID를 저장한다. 실제 commit은 메시지·로그까지 준비한 라우트가 수행한다.
 def save_state(conn, session_id, state, next_id):
     conn.execute(
-        "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, ?) "
+        "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES ($1, $2, $3) "
         "ON CONFLICT(session_id) DO UPDATE SET state_json = excluded.state_json, "
         "next_item_id = excluded.next_item_id, updated_at = CURRENT_TIMESTAMP",
         (session_id, json.dumps(state, ensure_ascii=False), next_id),
@@ -75,7 +82,7 @@ def save_state(conn, session_id, state, next_id):
 # 메시지·상태와 같은 트랜잭션에 넣어 응답만 저장되거나 카운터만 바뀌는 상황을 막는다.
 def save_controller_event(conn, session_id, turn, event):
     conn.execute(
-        "INSERT INTO controller_events (session_id, turn, event_json) VALUES (?, ?, ?)",
+        "INSERT INTO controller_events (session_id, turn, event_json) VALUES ($1, $2, $3)",
         (session_id, turn, json.dumps(event, ensure_ascii=False)),
     )
 
@@ -83,7 +90,7 @@ def save_controller_event(conn, session_id, turn, event):
 # 상담별 판정 로그를 턴 순서대로 반환해 동일 프롬프트의 통제 적용 전후를 비교할 수 있게 한다.
 def load_controller_events(conn, session_id):
     rows = conn.execute(
-        "SELECT turn, event_json, created_at FROM controller_events WHERE session_id = ? ORDER BY turn",
+        "SELECT turn, event_json, created_at FROM controller_events WHERE session_id = $1 ORDER BY turn",
         (session_id,),
     ).fetchall()
     return [
@@ -94,7 +101,7 @@ def load_controller_events(conn, session_id):
 
 # 저장된 진로맵 JSON을 읽는다. 아직 정리하지 않은 상담이면 None을 반환한다.
 def load_career_map(conn, session_id, state=None):
-    row = conn.execute("SELECT map_json FROM career_maps WHERE session_id = ?", (session_id,)).fetchone()
+    row = conn.execute("SELECT map_json FROM career_maps WHERE session_id = $1", (session_id,)).fetchone()
     career_map = json.loads(row["map_json"]) if row else None
     return without_card_criteria(career_map, state) if state is not None else career_map
 
@@ -110,7 +117,7 @@ def message_dict(row):
 # 상담의 메시지를 저장 순서대로 읽어 화면 복원과 모델 대화 기록 구성에 사용한다.
 def load_messages(conn, session_id, state=None):
     rows = conn.execute(
-        "SELECT id, turn, role, content, suggestions FROM messages WHERE session_id = ? ORDER BY id",
+        "SELECT id, turn, role, content, suggestions FROM messages WHERE session_id = $1 ORDER BY id",
         (session_id,),
     ).fetchall()
     messages = [message_dict(r) for r in rows]
@@ -134,11 +141,12 @@ def history_and_turn(rows, state=None):
 
 # 검증된 챗봇 답변·예시 답변을 저장하고, 화면에 바로 보낼 메시지 객체를 반환한다.
 def insert_assistant(conn, session_id, turn, content, suggestions):
-    cur = conn.execute(
-        "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, ?, 'assistant', ?, ?)",
+    message_id = conn.execute(
+        "INSERT INTO messages (session_id, turn, role, content, suggestions) "
+        "VALUES ($1, $2, 'assistant', $3, $4) RETURNING id",
         (session_id, turn, content, json.dumps(suggestions, ensure_ascii=False)),
-    )
-    return {"id": cur.lastrowid, "turn": turn, "role": "assistant", "content": content, "suggestions": suggestions}
+    ).fetchone()["id"]
+    return {"id": message_id, "turn": turn, "role": "assistant", "content": content, "suggestions": suggestions}
 
 
 # 현재 선택 가능한 카드가 있는지 검사해 이미 선택·건너뛴 카드의 중복 처리를 막는다.

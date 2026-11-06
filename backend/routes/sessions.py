@@ -38,22 +38,25 @@ def create_session(request: SessionRequest):
     greeting = PERSONAS[request.tone]["greeting"]
     content = greeting["content"].format(name=name)
     conn = get_db()
-    conn.execute("INSERT INTO sessions (id) VALUES (?)", (session_id,))
-    conn.execute(
-        "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES (?, ?, 1)",
-        (session_id, json.dumps(state, ensure_ascii=False)),
-    )
-    cur = conn.execute(
-        "INSERT INTO messages (session_id, turn, role, content, suggestions) VALUES (?, 0, 'assistant', ?, ?)",
-        (session_id, content, json.dumps(greeting["suggestions"], ensure_ascii=False)),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("INSERT INTO sessions (id) VALUES ($1)", (session_id,))
+        conn.execute(
+            "INSERT INTO session_state (session_id, state_json, next_item_id) VALUES ($1, $2, 1)",
+            (session_id, json.dumps(state, ensure_ascii=False)),
+        )
+        message_id = conn.execute(
+            "INSERT INTO messages (session_id, turn, role, content, suggestions) "
+            "VALUES ($1, 0, 'assistant', $2, $3) RETURNING id",
+            (session_id, content, json.dumps(greeting["suggestions"], ensure_ascii=False)),
+        ).fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
     return {
         "session_id": session_id,
         "state": state,
         "message": {
-            "id": cur.lastrowid,
+            "id": message_id,
             "turn": 0,
             "role": "assistant",
             "content": content,

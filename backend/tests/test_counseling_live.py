@@ -7,7 +7,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from counseling.controller import plan_turn  # noqa: E402
+from counseling import exploration as E  # noqa: E402
+from counseling.controller import complete_turn, plan_turn  # noqa: E402
 from counseling.state import empty_state, merge  # noqa: E402
 from llm import client  # noqa: E402
 
@@ -123,3 +124,51 @@ def test_rapport_consent_keeps_the_assigned_question_without_suggestions(model_o
     assert reply.question and reply.content.count("?") == 1
     assert reply.asked_question_id == plan["rapport_action"]["question"]["id"]
     assert reply.suggestions == []
+
+
+# 실제 비교를 전달한 뒤에만 다음 행동으로 이동하며, 별도 단계 판정 API를 호출하지 않는다.
+def test_exploration_comparison_advances_after_actual_delivery(model_outputs):
+    state = career_state(True)
+    state["experiences"] = [dict(id=2, text="모델 구현", status="confirmed", evidence="구현해봤어", turn=1)]
+    state["exploration"]["candidates"] = [dict(name=name, source="user", active=True) for name in ("대학원", "취업")]
+    history = [{"role": "user", "content": "모델을 구현해 본 적이 있고, 성장하는 게 중요해요. 대학원과 취업을 고민하고 있어요."}]
+    message = "현실 조건은 특별히 없어요. 대학원과 취업을 비교해 보고 싶어요. 선택을 대신 해줄 필요는 없어요."
+    result = client.classify(state, history, message)
+    merged, _ = merge(state, result, 2, 3, user_message=message)
+    plan = plan_turn(merged, result, 2)
+    assert plan["exploration"] and plan["exploration"]["focus"] == "comparison", result.model_dump()
+    assert merged["exploration"]["comparison"] is None
+    reply = client.generate_reply(merged, history, message, 2, plan)
+    assert reply.validation_errors == [], model_outputs[-1].model_dump()
+    complete_turn(merged, plan, reply)
+    assert merged["exploration"]["comparison"] is not None, model_outputs[-1].model_dump()
+    next_plan = E.plan_turn(merged, dict(question="optional", follow_up="reflect", request_type="reflection"))
+    assert next_plan["focus"] == "action"
+    assert len(model_outputs) == 2
+
+
+# 단순 호응은 여러 제안 중 하나를 선택한 것으로 만들지 않는다.
+def test_exploration_ambiguous_agreement_keeps_actions_proposed():
+    state = career_state(True)
+    state["exploration"]["focus"] = "action"
+    E.record_summary(state, [dict(text="논문 읽기", selected=False), dict(text="재학생에게 물어보기", selected=False)], 1)
+    state["exploration"]["last_proposed_ids"] = [1, 2]
+    state["controller"]["last_question"] = dict(type="optional", item_ids=[], text="어떤 일을 해보고 싶으신가요?")
+    history = [{"role": "assistant", "content": "논문을 읽거나 재학생에게 물어볼 수 있어요. 어떤 일을 해보고 싶으신가요?"}]
+    result = client.classify(state, history, "좋아요")
+    merged, _ = merge(state, result, 2, 2, user_message="좋아요")
+    assert all(a["status"] == "proposed" for a in merged["exploration"]["actions"]), result.model_dump()
+
+
+# 명시적인 실행 약속과 철회는 실제 사용자 인용과 행동 ID로 연결한다.
+@pytest.mark.parametrize("message,status", [
+    ("이번 주에 연구실 논문을 찾아볼게요", "selected"),
+    ("연구실 논문을 찾아보는 건 하지 않을래요", "withdrawn"),
+])
+def test_exploration_explicit_action_decision(message, status):
+    state = career_state(True)
+    E.record_summary(state, [dict(text="연구실 논문 찾아보기", selected=False)], 1)
+    history = [{"role": "assistant", "content": "연구실 논문을 찾아보며 실제 연구 내용을 살펴볼 수 있어요."}]
+    result = client.classify(state, history, message)
+    merged, _ = merge(state, result, 2, 2, user_message=message)
+    assert merged["exploration"]["actions"][0]["status"] == status, result.model_dump()

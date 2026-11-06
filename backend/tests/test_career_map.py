@@ -42,13 +42,13 @@ def test_candidate_note_with_unknown_criterion_raises():
         build_career_map(state_with_criteria(), out, last_message_id=10)
 
 
-def test_selected_flag_preserved():
+def test_model_cannot_mark_an_unconfirmed_action_as_selected():
     out = output(next_actions=[
         {"text": "현직자 인터뷰", "selected": True},
         {"text": "관련 프로젝트 참여", "selected": False},
     ])
     cm = build_career_map(state_with_criteria(), out, last_message_id=10)
-    assert [a["selected"] for a in cm["next_actions"]] == [True, False]
+    assert [a["selected"] for a in cm["next_actions"]] == [False, False]
 
 
 def test_blank_and_duplicate_notes_are_dropped():
