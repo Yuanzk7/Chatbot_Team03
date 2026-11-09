@@ -3,6 +3,7 @@
 흐름: plan_turn(조건 판정) → LLM 응답 → finalize_reply(검증·조립)
       → complete_turn(실제로 전달한 질문 기록). 저장은 routes가 한 트랜잭션으로 처리한다.
 """
+import re
 from dataclasses import dataclass, field
 
 from counseling import exploration
@@ -13,11 +14,18 @@ from counseling.rapport import choose_action
 
 DIRECTION_LIMIT = 10
 CAREER_CONCERN_QUESTION = "지금 진로와 관련해서 어떤 고민이 있으신가요?"
+RECOMMENDATION_FALLBACK = "지금까지 확인한 경험과 기준만으로는 진로 후보를 추천하기 어려워요."
+RETRY_CONTENT = "답변을 제대로 만들지 못했어요. 같은 내용을 한 번 더 보내 주시면 다시 답할게요."
+RECOMMENDATION_ERRORS = {"recommendation_not_allowed", "recommendation_missing_confirmed_basis"}
+QUESTION_MARKS = ("?", "？")
+_QUOTED = re.compile(r"‘[^’\n]*’|“[^”\n]*”|'[^'\n]*'|\"[^\"\n]*\"|「[^」\n]*」|『[^』\n]*』")
+_SENTENCE_END = re.compile(r"[.!?](?=\s)|[。！？\n]")  # 3.5 같은 소수점은 문장 끝이 아니다
 
 
 @dataclass
 class ControlledReply:
-    """화면에 전달할 답변과, 저장할 검증 결과를 함께 담는 내부 자료형."""
+    """화면에 전달할 답변과, 저장할 검증 결과를 함께 담는 내부 자료형.
+    validation_errors는 대체 응답으로 바꾼 차단 오류, warnings는 고쳐서 전달한 형식 문제다."""
     content: str
     suggestions: list[str] = field(default_factory=list)
     asked_question_id: int | None = None
@@ -26,6 +34,8 @@ class ControlledReply:
     used_basis_ids: list[int] = field(default_factory=list)
     question: str | None = None
     exploration: dict | None = None
+    warnings: list[str] = field(default_factory=list)
+    discarded: dict | None = None
 
 
 # 상담별 통제 설정과 진행 상태를 만든다. 대화의 turn 번호와 탐색 횟수는 별개다.
@@ -299,12 +309,47 @@ def format_turn_plan(plan):
     return "\n".join(lines)
 
 
-# 근거 ID와 추천 조건을 검사한다. 위반하면 모델을 재호출하지 않고 안전한 질문 응답으로 바꾼다.
+# 인용 구간을 같은 길이의 공백으로 가린다. 설명 속 연구 질문 인용은 사용자에게 묻는 질문이 아니다.
+def _mask_quotes(text):
+    return _QUOTED.sub(lambda m: " " * len(m.group()), text)
+
+
+# 인용을 제외하고 물음표가 남아 있는지 확인한다.
+def _has_question(text):
+    masked = _mask_quotes(text)
+    return any(mark in masked for mark in QUESTION_MARKS)
+
+
+# 끝 문장이 사용자에게 답을 요구하는 질문이면 (본문, 질문)으로 나눈다. 인용과 중간의 물음표는 본문에 남긴다.
+def _split_trailing_question(content):
+    masked = _mask_quotes(content).rstrip()
+    if not masked.endswith(QUESTION_MARKS):
+        return content, None
+    end = len(masked.rstrip("?？"))
+    start = max((m.end() for m in _SENTENCE_END.finditer(masked, 0, end)), default=0)
+    return content[:start].rstrip(), content[start:].strip()
+
+
+# 질문 필드에 질문이 여러 개면 첫 질문까지만 남기고, 나머지를 (첫 질문, 나머지)로 돌려준다.
+def _split_extra_questions(question):
+    masked = _mask_quotes(question)
+    marks = [masked.find(mark) for mark in QUESTION_MARKS if mark in masked]
+    if not marks:
+        return question, None
+    end = min(marks) + 1
+    while end < len(masked) and masked[end] in "?？":
+        end += 1
+    rest = question[end:].strip()
+    return (question[:end].strip(), rest) if _has_question(rest) else (question, None)
+
+
+# 근거 ID·추천 조건 위반은 차단해 대체 응답으로 바꾸고, 질문 위치·개수 같은 형식 문제는 설명을 살린 채 고친다.
 def finalize_reply(state, plan, reply):
     """구조화 필드로 선언된 추천·근거를 검사한다. 자유 문장의 의미 자체를 판정하는 함수는 아니다.
     본문에 숨긴 단정 등은 프롬프트와 실제 대화 시나리오 평가로 별도 확인해야 한다.
+    모델을 다시 호출하지 않으며, 버리거나 떼어 낸 내용은 discarded에 남겨 판정 로그로 확인한다.
     """
-    errors = []
+    errors, warnings, discarded = [], [], {}
     content = reply.content.strip()
     # 같은 질문만 두 필드에 중복한 경우는 조립 단계에서 한 번만 표시한다. 다른 본문 질문은 계속 검사한다.
     if content == (reply.question or "").strip():
@@ -315,8 +360,6 @@ def finalize_reply(state, plan, reply):
         allowed = set(plan["allowed_basis_ids"])
         if not used_ids <= allowed:
             errors.append("unconfirmed_or_unknown_basis")
-        if "?" in content or "？" in content:
-            errors.append("question_in_content")
         if recommendations and (not plan["allow_recommendation"] or plan["request_type"] != "recommendation"):
             errors.append("recommendation_not_allowed")
         for candidate in recommendations:
@@ -324,44 +367,66 @@ def finalize_reply(state, plan, reply):
             if (not basis <= allowed or not basis.intersection(plan["experience_ids"])
                     or not basis.intersection(plan["criterion_ids"])):
                 errors.append("recommendation_missing_confirmed_basis")
-            if "?" in candidate.reason or "？" in candidate.reason:
+            if _has_question(candidate.reason):
                 errors.append("question_in_recommendation")
     if any(not c.candidate.strip() or not c.reason.strip() for c in recommendations):
         errors.append("empty_recommendation")
     question = plan.get("fixed_question") or (reply.question or "").strip() or None
     requires_question = plan["question"] not in ("none", "optional")
-    if plan["question"] == "none":
+    may_ask = plan["question"] != "none" and not (
+        plan.get("exploration") and not plan["exploration"]["allow_question"])
+    if not may_ask:
         question = None
-    if plan.get("exploration") and not plan["exploration"]["allow_question"]:
-        question = None
+    if plan["controller_enabled"]:
+        # 사용자에게 묻는 끝 문장은 질문 자리가 비어 있으면 question으로 옮기고, 아니면 떼어 낸다.
+        content, trailing = _split_trailing_question(content)
+        if trailing:
+            warnings.append("question_in_content")
+            if question is None and may_ask:
+                question = trailing
+            else:
+                discarded["content_question"] = trailing
+        elif _has_question(content):
+            warnings.append("question_in_content")  # 소제목·수사적 질문은 설명과 함께 남긴다
+    fallback_rapport_id = None
     if plan["controller_enabled"] and requires_question and not question:
-        errors.append("missing_question")
-    if question and (question.count("?") + question.count("？") > 1):
-        errors.append("multiple_questions")
+        # 필수 질문만 빠졌다면 설명을 버리지 않고 질문만 보완한다.
+        warnings.append("missing_question")
+        action_q = plan["rapport_action"].get("question")
+        question = action_q["text"] if action_q else "지금 이야기에서 가장 고민되는 점은 무엇인가요?"
+        fallback_rapport_id = action_q["id"] if action_q else None
+    if question:
+        question, extra = _split_extra_questions(question)
+        if extra:
+            warnings.append("multiple_questions")
+            discarded["extra_questions"] = extra
     metadata = None
     if not errors:
         content, metadata = exploration.prepare_reply(plan.get("exploration"), reply, content)
     if not content and not question and not recommendations:
         errors.append("empty_reply")
-    fallback_rapport_id = None
-    if errors == ["missing_question"]:
-        # 본문·추천 근거가 유효하고 질문만 빠졌다면 설명을 버리지 않고 질문만 보완한다.
-        action_q = plan["rapport_action"].get("question")
-        question = action_q["text"] if action_q else "지금 이야기에서 가장 고민되는 점은 무엇인가요?"
-        fallback_rapport_id = action_q["id"] if action_q else None
-    elif errors:
-        metadata = None
-        content = "말씀하신 내용부터 차근차근 살펴볼게요."
+    if errors:
+        # 사용자에게는 보내지 않지만 무엇을 막았는지 평가할 수 있도록 원문을 보관한다.
+        discarded["reply"] = {
+            "content": reply.content, "question": reply.question, "basis_ids": list(reply.basis_ids),
+            "recommendations": [{"candidate": c.candidate, "reason": c.reason, "basis_ids": list(c.basis_ids)}
+                                for c in reply.recommendations],
+        }
+        metadata, fallback_rapport_id = None, None
         question = plan.get("fixed_question")
         if requires_question and not question:
             action_q = plan["rapport_action"].get("question")
             question = (action_q["text"] if action_q else "지금 이야기에서 가장 중요하게 느끼는 점은 무엇인가요?")
             # 코드가 원래 라포 질문을 직접 전달했다면 실제로 물은 질문으로 기록한다.
             fallback_rapport_id = action_q["id"] if action_q else None
-        elif plan["rapport_action"]["type"] in ("wrap_up", "concern"):
+        if plan["rapport_action"]["type"] in ("wrap_up", "concern"):
             content = "아래 카드 중 지금 가장 나다운 카드 하나를 골라 주세요."
-        elif plan["question"] == "none":
-            content = "궁금한 내용을 조금 더 구체적으로 말씀해 주세요."
+        elif plan["request_type"] == "recommendation" and RECOMMENDATION_ERRORS.intersection(errors):
+            content = RECOMMENDATION_FALLBACK
+        elif question:
+            content = ""  # 예고 문구 없이 필요한 질문만 전달한다
+        else:
+            content = RETRY_CONTENT
         recommendations, used_ids = [], set()
     for candidate in recommendations:
         content += f"\n\n**{candidate.candidate.strip()}**: {candidate.reason.strip()}"
@@ -383,7 +448,8 @@ def finalize_reply(state, plan, reply):
             asked_id = reply.asked_question_id
     picks = reply.rapport_cards if not errors and action["type"] == "wrap_up" else []
     suggestions = suggestions_for_stage(state, suggestions, has_question=bool(question))
-    return ControlledReply(content, suggestions[:3], asked_id, picks, sorted(set(errors)), sorted(used_ids), question, metadata)
+    return ControlledReply(content, suggestions[:3], asked_id, picks, sorted(set(errors)), sorted(used_ids), question,
+                           metadata, sorted(set(warnings)), discarded or None)
 
 
 # 실제로 전달한 질문만 기록한다. 이후 DB 저장이 실패하면 이 변경도 저장되지 않는다.
@@ -409,5 +475,6 @@ def decision_record(state, plan, reply):
             "triggered_rules": plan["triggered_rules"], "question": plan["question"],
             "allow_recommendation": plan["allow_recommendation"], "direction": dict(state["controller"]["direction"]),
             "confirm_item_ids": plan.get("confirm_item_ids", []), "used_basis_ids": reply.used_basis_ids,
-            "validation_errors": reply.validation_errors,
+            "validation_errors": reply.validation_errors, "warnings": reply.warnings,
+            "discarded": reply.discarded,
             "exploration_focus": state.get("exploration", {}).get("focus")}

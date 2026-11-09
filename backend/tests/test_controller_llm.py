@@ -147,7 +147,7 @@ def test_missing_question_fallback_records_delivered_rapport_question(monkeypatc
     monkeypatch.setattr(client, "_parse", Mock(return_value=reply()))
     result = client.generate_reply(state, [], "시작해볼게요", 1, plan)
     apply_reply(state["rapport"], plan["rapport_action"], result.asked_question_id)
-    assert "missing_question" in result.validation_errors
+    assert "missing_question" in result.warnings and result.validation_errors == []
     assert result.asked_question_id == 17
     assert state["rapport"]["questions"][0]["asks"] == 1
     assert result.question == state["rapport"]["questions"][0]["text"]
@@ -168,6 +168,27 @@ def test_identical_rapport_question_in_both_fields_is_delivered_once(monkeypatch
     assert result.content == question
     assert result.question == question
     assert result.validation_errors == []
+    assert state["rapport"]["questions"][0]["asks"] == 1
+
+
+# 11/2 실제 사례: 라포 질문을 본문에 쓰면 대체 응답 없이 질문 하나만 전달하고 물은 질문으로 기록한다.
+@pytest.mark.parametrize("model_question", [None, "지금까지 해본 것 중에 가장 재미있었던 경험은 무엇인가요?"])
+def test_rapport_question_written_in_content_is_delivered_once(monkeypatch, model_question):
+    state = career_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"].update(done=False, done_turn=None)
+    state["rapport"]["questions"] = [dict(id=17, text="지금까지 해본 것 중에 가장 재미있었던 경험은 뭐야?",
+                                          status="pending", asks=0, holds=0)]
+    question = "지금까지 해본 것 중에 가장 재미있었던 경험은 무엇인가요?"
+    plan = plan_turn(state, classification(), 1)
+    monkeypatch.setattr(client, "_parse", Mock(return_value=reply(
+        content="좋아요. " + question, question=model_question, asked_question_id=17)))
+    result = client.generate_reply(state, [], "네, 여쭤보세요", 1, plan)
+    apply_reply(state["rapport"], plan["rapport_action"], result.asked_question_id)
+    assert result.validation_errors == []
+    assert result.content == "좋아요.\n\n" + question
+    assert "살펴볼게요" not in result.content and "뭐야" not in result.content
+    assert result.asked_question_id == 17
     assert state["rapport"]["questions"][0]["asks"] == 1
 
 

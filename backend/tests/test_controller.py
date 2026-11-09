@@ -375,22 +375,122 @@ def test_fixed_question_overrides_model_question_and_drops_rapport_id():
     assert reply.asked_question_id is None
 
 
-# 본문에 질문을 섞어 한 턴에 여러 질문이 나갈 위험이 있으면 안전한 응답으로 대체한다.
-def test_question_in_content_is_replaced_by_safe_response():
+# 본문 끝의 질문은 질문 필드가 이미 있으면 떼어 내고, 질문은 하나만 전달한다. 설명은 버리지 않는다.
+def test_content_question_is_dropped_when_question_field_is_used():
     state = state_with_items()
     plan = C.plan_turn(state, signals(request_type="information"), 2)
     reply = C.finalize_reply(state, plan, model_reply(content="다른 직업도 궁금하신가요?"))
-    assert "question_in_content" in reply.validation_errors
-    assert "다른 직업도" not in reply.content
+    assert reply.validation_errors == []
+    assert reply.warnings == ["question_in_content"]
+    assert reply.content == reply.question == "이 선택에서 가장 고민되는 점은 무엇인가요?"
+    assert reply.discarded == {"content_question": "다른 직업도 궁금하신가요?"}
 
 
-# 질문을 생략할 수 있어도 여러 질문을 한꺼번에 물을 수는 없다.
-def test_optional_question_still_rejects_multiple_questions():
+# 질문 필드가 비어 있고 질문이 허용된 턴이면 본문 끝의 질문을 question으로 옮겨 관리한다.
+def test_trailing_content_question_moves_to_empty_question_slot():
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information"), 2)
+    reply = C.finalize_reply(state, plan, model_reply(
+        content="연구실 생활은 연구실마다 달라요. 다른 직업도 궁금하신가요?", question=None))
+    assert reply.validation_errors == []
+    assert reply.warnings == ["question_in_content"]
+    assert reply.question == "다른 직업도 궁금하신가요?"
+    assert reply.content == "연구실 생활은 연구실마다 달라요.\n\n다른 직업도 궁금하신가요?"
+    assert reply.discarded is None
+
+
+# 문장 경계는 공백·줄바꿈 앞의 마침표로 판단해, 학점 같은 소수점에서 질문을 잘못 자르지 않는다.
+@pytest.mark.parametrize("content,body,question", [
+    ("평균 학점은 3.5 정도예요. 4.0 이상이 필요한가요?", "평균 학점은 3.5 정도예요.", "4.0 이상이 필요한가요?"),
+    ("학점 3.5 이상이 필요한가요?", "", "학점 3.5 이상이 필요한가요?"),
+    ("공정과 설계가 있어요.\n- 공정\n- 설계\n어느 쪽이 끌리시나요??", "공정과 설계가 있어요.\n- 공정\n- 설계",
+     "어느 쪽이 끌리시나요??"),
+])
+def test_trailing_question_split_respects_sentence_boundaries(content, body, question):
+    assert C._split_trailing_question(content) == (body, question)
+
+
+# 따옴표로 인용한 연구 질문은 사용자에게 묻는 질문이 아니므로 설명을 그대로 전달한다.
+@pytest.mark.parametrize("quoted", ["‘왜 이 현상이 생길까?’", "\"왜 이 현상이 생길까?\"", "“왜 이 현상이 생길까?”"])
+def test_quoted_research_question_in_content_is_preserved(quoted):
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information"), 2)
+    content = f"연구는 보통 {quoted}라는 질문에서 출발합니다. 기존 논문이 답하지 못한 부분을 찾는 과정이에요."
+    reply = C.finalize_reply(state, plan, model_reply(content=content, question=None))
+    assert reply.validation_errors == [] and reply.warnings == []
+    assert reply.content == content and reply.question is None
+
+
+# 본문 중간의 물음표(소제목·수사적 질문)는 설명을 보존하고 경고로만 기록한다.
+def test_mid_text_question_mark_is_kept_with_warning():
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information"), 2)
+    content = "**무엇을 배우나?** 석사 과정에서는 논문을 읽고 연구 질문을 다듬는 법을 익힙니다."
+    reply = C.finalize_reply(state, plan, model_reply(content=content, question=None))
+    assert reply.validation_errors == []
+    assert reply.warnings == ["question_in_content"]
+    assert reply.content == content and reply.question is None
+
+
+# 코드가 고정 질문을 붙이는 턴에는 본문 끝의 질문을 떼어 내 질문이 하나만 나가게 한다.
+def test_trailing_content_question_is_dropped_when_fixed_question_is_attached():
+    state = state_with_items()
+    state["controller"]["direction"].update(label="반도체 연구", turns=9)
+    plan = C.plan_turn(state, signals(direction_relation="same"), 10)
+    reply = C.finalize_reply(state, plan, model_reply(
+        content="반도체 연구는 공정과 설계로 나눠 볼 수 있어요. 어느 쪽이 더 끌리시나요?"))
+    assert reply.validation_errors == []
+    assert reply.content == "반도체 연구는 공정과 설계로 나눠 볼 수 있어요.\n\n" + plan["fixed_question"]
+    assert reply.content.count("?") == 1
+    assert reply.discarded == {"content_question": "어느 쪽이 더 끌리시나요?"}
+
+
+# 질문하지 말라고 한 턴에는 본문 끝의 질문도 전달하지 않는다.
+def test_answer_only_turn_drops_trailing_content_question():
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information", follow_up="answer_only"), 2)
+    reply = C.finalize_reply(state, plan, model_reply(
+        content="석사 과정은 연구 방법을 익히는 기간이에요. 더 궁금한 점이 있으신가요?", question=None))
+    assert reply.validation_errors == []
+    assert reply.content == "석사 과정은 연구 방법을 익히는 기간이에요."
+    assert reply.question is None and reply.suggestions == []
+    assert reply.discarded == {"content_question": "더 궁금한 점이 있으신가요?"}
+
+
+# 질문 필드에 여러 질문이 있으면 첫 질문만 남기고 설명은 그대로 전달한다.
+def test_multiple_questions_keep_only_the_first():
     state = state_with_items()
     plan = C.plan_turn(state, signals(request_type="information"), 2)
     reply = C.finalize_reply(state, plan, model_reply(question="어느 쪽인가요? 이유는 무엇인가요?"))
-    assert "multiple_questions" in reply.validation_errors
-    assert reply.content.count("?") <= 1
+    assert reply.validation_errors == []
+    assert reply.warnings == ["multiple_questions"]
+    assert reply.question == "어느 쪽인가요?"
+    assert reply.content == "말씀하신 경험과 기준을 함께 살펴보겠습니다.\n\n어느 쪽인가요?"
+    assert reply.discarded == {"extra_questions": "이유는 무엇인가요?"}
+
+
+# 근거 위반은 계속 차단하되, 예고만 하는 문구 대신 재시도를 안내하고 원문은 로그용으로 보관한다.
+def test_blocked_reply_keeps_original_and_asks_for_retry():
+    state = state_with_items()
+    plan = C.plan_turn(state, signals(request_type="information"), 2)
+    reply = C.finalize_reply(state, plan, model_reply(
+        content="회로 경험을 보면 설계가 잘 맞아요.", question=None, basis_ids=[99]))
+    assert reply.validation_errors == ["unconfirmed_or_unknown_basis"]
+    assert reply.content == C.RETRY_CONTENT and reply.question is None
+    assert "살펴볼게요" not in reply.content
+    assert reply.discarded["reply"]["content"] == "회로 경험을 보면 설계가 잘 맞아요."
+    assert reply.discarded["reply"]["basis_ids"] == [99]
+
+
+# 추천을 요청했지만 근거가 부족해 차단되면 그 이유를 밝히고 근거 수집 질문을 붙인다.
+def test_blocked_recommendation_explains_reason_with_fixed_question():
+    state = state_with_items()
+    state["experiences"] = []
+    plan = C.plan_turn(state, signals(request_type="recommendation"), 2)
+    reply = C.finalize_reply(state, plan, model_reply(recommendations=[recommendation([2])]))
+    assert "recommendation_not_allowed" in reply.validation_errors
+    assert reply.content == C.RECOMMENDATION_FALLBACK + "\n\n" + plan["fixed_question"]
+    assert reply.discarded["reply"]["recommendations"][0]["candidate"] == "회로 설계 분야"
 
 
 # 비교 실험에서 통제를 끄면 조건 판정과 방향 카운터 강제를 적용하지 않는다.

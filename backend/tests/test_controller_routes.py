@@ -597,3 +597,34 @@ def test_legacy_exploration_restores_existing_map_actions_without_writing(sessio
     with db.get_db() as conn:
         raw = json.loads(conn.execute("SELECT state_json FROM session_state WHERE session_id=$1", (session_id,)).fetchone()["state_json"])
         assert "exploration" not in raw
+
+
+# 차단한 응답과 형식만 고친 응답 모두, 평가에 쓸 원문·복구 내역을 메시지와 같은 판정 로그에 남긴다.
+@pytest.mark.parametrize("model_reply,errors,warnings,discarded", [
+    (dict(content="회로 경험을 보면 설계 분야가 잘 맞아요.", question=None, basis_ids=[99]),
+     ["unconfirmed_or_unknown_basis"], [], "reply"),
+    (dict(content="설계 분야는 회로를 직접 다루는 일이 많아요. 더 궁금한 점이 있나요?",
+          question="어떤 부분이 가장 궁금하신가요?", basis_ids=[]),
+     [], ["question_in_content"], "content_question"),
+])
+def test_decision_log_keeps_discarded_output(session_id, monkeypatch, model_reply, errors, warnings, discarded):
+    def parse(instructions, history, schema, label):
+        if label == "classify":
+            return classification(request_type="information")
+        return client.Reply(suggestions=[], asked_question_id=None, rapport_cards=[], recommendations=[],
+                            **model_reply)
+
+    monkeypatch.setattr(client, "_parse", Mock(side_effect=parse))
+    response = messages.send_message(session_id, messages.MessageRequest(
+        content="설계 분야는 어때?", request_id="discarded-" + discarded))
+    content = response["message"]["content"]
+    assert "살펴볼게요" not in content and content.count("?") <= 1
+    decision = sessions.get_session(session_id)["controller_events"][-1]["decision"]
+    assert decision["validation_errors"] == errors
+    assert decision["warnings"] == warnings
+    assert discarded in decision["discarded"]
+    if errors:
+        assert "회로 경험" not in content
+        assert decision["discarded"]["reply"]["content"] == model_reply["content"]
+    else:
+        assert "회로를 직접 다루는 일이 많아요." in content

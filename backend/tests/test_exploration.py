@@ -186,6 +186,19 @@ def test_proposal_and_explicit_decision_are_distinct_in_the_map():
         dict(text="연구실 논문 찾아보기", selected=True)]
 
 
+# 질문 위치만 고친 응답은 정상 전달이므로 행동 제안과 진행 기록을 그대로 남긴다.
+def test_repaired_question_placement_still_records_progress():
+    state = career_state()
+    state, _ = merge(state, classified(progress(focus="action")), 2, 3)
+    reply = deliver(state, plan_turn(state, classified(), 2),
+                    content="연구실 논문을 먼저 보면 분위기를 알 수 있어요. 어떤 분야부터 보실래요?",
+                    question="어느 연구실이 궁금하신가요?",
+                    exploration=dict(compared_candidates=[], proposed_actions=["연구실 논문 찾아보기"]))
+    assert reply.validation_errors == [] and reply.warnings == ["question_in_content"]
+    assert "어떤 분야부터" not in reply.content and reply.content.count("?") == 1
+    assert state["exploration"]["actions"][0]["status"] == "proposed"
+
+
 # 질문·공감 없이 행동만 제안하는 정상 응답도 코드가 표시하고 기록할 수 있다.
 def test_actions_only_reply_is_rendered_before_empty_reply_validation():
     state = career_state()
