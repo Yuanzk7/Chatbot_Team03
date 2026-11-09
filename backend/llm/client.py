@@ -11,8 +11,7 @@ from counseling.career_map import CareerMapOutput, active_criteria
 from counseling.controller import finalize_reply
 from counseling.exploration import ExplorationOutput, classification_context
 from counseling.state import Classification, classification_state, format_state
-from llm.personas import PERSONAS
-from llm.prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT
+from llm.prompts import CLASSIFY_PROMPT, SUMMARY_PROMPT, SYSTEM_PROMPT, TONE_PROMPT
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")  # 프로젝트 루트의 .env
 
@@ -118,7 +117,7 @@ def generate_reply(state, history, user_message, turn, plan):
     reply = _parse(
         SYSTEM_PROMPT
         + "\n"
-        + PERSONAS.get(state.get("tone"), PERSONAS["counselor"])["tone"].format(name=state.get("preferred_name") or "사용자")
+        + TONE_PROMPT.format(name=state.get("preferred_name") or "사용자")
         + "\n"
         + format_state(state, turn, plan),
         _messages(history, user_message),

@@ -5,38 +5,36 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from counseling.state import TONES, empty_state
-from llm.personas import PERSONAS
+from counseling.flow import INTRO_SUGGESTIONS
+from counseling.state import empty_state
 from routes.common import load_career_map, load_controller_events, load_messages, load_state, require_session
 from storage.db import get_db
 
 router = APIRouter()
 
+GREETING = "안녕하세요, {name}님. 윤이입니다. 진로상담을 시작하기 전에 먼저 {name}님에 대해 알아가고 싶어요. 몇 가지 여쭤봐도 될까요?"
+
 
 class SessionRequest(BaseModel):
     preferred_name: str
-    tone: str = "counselor"
     # 실험용 상담별 설정. 기본 프롬프트를 유지하고 컨트롤러의 추가 통제 적용 여부만 비교한다.
     controller_enabled: bool = True
 
 
-# 이름과 기본 말투로 상담을 만들고 통제 활성화 설정과 첫 인사를 함께 저장한다.
+# 이름으로 상담을 만들고 통제 활성화 설정과 첫 인사를 함께 저장한다.
 # controller_enabled는 상담별로 보관하므로 다른 상담의 실험 설정에 영향을 주지 않는다.
 @router.post("/api/sessions")
 def create_session(request: SessionRequest):
-    """시작 화면에서 받은 이름·말투로 상담을 만들고, 윤이의 인사를 첫 메시지(turn 0)로 넣는다."""
+    """시작 화면에서 받은 이름으로 상담을 만들고, 윤이의 인사를 첫 메시지(turn 0)로 넣는다."""
     name = request.preferred_name.strip()
     if not name or len(name) > 20:
         raise HTTPException(status_code=422, detail="이름이나 호칭을 1~20자로 입력해 주세요.")
-    if request.tone not in TONES:
-        raise HTTPException(status_code=422, detail="말투는 friend, counselor, spicy 중 하나여야 합니다.")
     session_id = str(uuid.uuid4())
     state = empty_state()
     state["preferred_name"] = name
-    state["tone"] = request.tone
     state["controller"]["enabled"] = request.controller_enabled
-    greeting = PERSONAS[request.tone]["greeting"]
-    content = greeting["content"].format(name=name)
+    suggestions = list(INTRO_SUGGESTIONS)
+    content = GREETING.format(name=name)
     conn = get_db()
     try:
         conn.execute("INSERT INTO sessions (id) VALUES ($1)", (session_id,))
@@ -47,7 +45,7 @@ def create_session(request: SessionRequest):
         message_id = conn.execute(
             "INSERT INTO messages (session_id, turn, role, content, suggestions) "
             "VALUES ($1, 0, 'assistant', $2, $3) RETURNING id",
-            (session_id, content, json.dumps(greeting["suggestions"], ensure_ascii=False)),
+            (session_id, content, json.dumps(suggestions, ensure_ascii=False)),
         ).fetchone()["id"]
         conn.commit()
     finally:
@@ -60,7 +58,7 @@ def create_session(request: SessionRequest):
             "turn": 0,
             "role": "assistant",
             "content": content,
-            "suggestions": greeting["suggestions"],
+            "suggestions": suggestions,
         },
     }
 

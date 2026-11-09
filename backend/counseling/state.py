@@ -58,14 +58,10 @@ class Classification(BaseModel):
 
 # --- state ---
 
-TONES = ("friend", "counselor", "spicy")  # prompts.PERSONAS의 키와 같다
-
-
 # 상담 시작 시 사용할 빈 상태를 만든다. 상담 규칙 상태도 함께 저장해 새로고침 후 이어간다.
 def empty_state():
     return {
         "preferred_name": None,
-        "tone": "counselor",
         "conversation_stage": "intro",
         "career_concern_received": False,
         "experiences": [],
