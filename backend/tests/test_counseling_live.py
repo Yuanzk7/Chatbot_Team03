@@ -85,10 +85,15 @@ def test_outcome_uncertainty_is_distinct_from_uncertain_criterion(message, with_
     print("\n제보 사례 실제 응답:\n" + reply.content)
 
 
-# 정보 질문을 계속 잘게 나누지 않고, 특히 함께 요청한 데이터·분석 방법을 한 번에 설명하는지 검사한다.
+# 짧은 주제 선택·설명 동의도 정보 요청으로 받아들이고, 추가 요청 없이 같은 턴에 설명한다.
 @pytest.mark.parametrize("message,history", [
     ("연구 주제를 정하는 과정을 설명해줘", TOPIC_HISTORY[:2]),
     ("데이터와 분석 방법", TOPIC_HISTORY),
+    ("논문에서 주제를 찾는 법", TOPIC_HISTORY[:4]),
+    ("네, 좋아요", [
+        {"role": "user", "content": CONCERN},
+        {"role": "assistant", "content": "석사 과정에서 배우는 내용을 논문 읽기와 연구 방법을 중심으로 설명해 드릴까요?"},
+    ]),
 ])
 def test_information_explanations_do_not_restart_topic_selection(message, history, model_outputs):
     state = career_state(False)
@@ -105,6 +110,11 @@ def test_information_explanations_do_not_restart_topic_selection(message, histor
     assert reply.content
     if message == "데이터와 분석 방법":
         assert "데이터" in reply.content and "분석" in reply.content
+    elif message in ("논문에서 주제를 찾는 법", "네, 좋아요"):
+        assert result.new_items == [] and result.updates == [], result.model_dump()
+        assert result.exploration is None or not result.exploration.actions, result.model_dump()
+        assert "논문" in reply.content
+        assert any(word in reply.content for word in ("질문", "한계", "분석", "검증", "방법"))
     print("\n정보 설명 실제 응답:\n" + reply.content)
 
 
