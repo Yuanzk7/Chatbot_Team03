@@ -69,6 +69,8 @@ def enter_career(state, turn, reason="user_requested"):
         cards["dismissed"] = True
     state["controller"]["pending_card_offer"] = None
     state["conversation_stage"] = "career"
+    # 화면 구분과 모델 입력 정리에 쓰도록 진로 상담이 시작된 턴을 처음 한 번만 기록한다.
+    state.setdefault("career_started_turn", turn)
 
 
 # 분류된 동의·중단·고민 신호를 반영한다. 한 질문 건너뛰기와 라포 전체 중단은 별도로 처리한다.
@@ -101,11 +103,35 @@ def suggestions_for_stage(state, suggestions, has_question=True):
     return list(suggestions)
 
 
+# 알아가기 구간을 질문·사용자 답변 원문과 카드 선택 사실로만 정리한다.
+# 챗봇이 덧붙인 해석·정리 문장은 넣지 않는다. 질문은 코드가 답변 끝에 붙인 마지막 문단에서 가져온다.
+def _rapport_record(rows, selected, cards):
+    lines = ["## 진로 상담 전 알아가기 대화", "질문과 사용자 답변 원문이다. 챗봇이 덧붙인 해석과 정리는 뺐다."]
+    question = None
+    for row in rows:
+        if row["role"] == "assistant":
+            last = row["content"].rsplit("\n\n", 1)[-1].strip()
+            question = last if last.endswith(("?", "？")) else None
+        else:
+            lines.append(f"- 질문: {question}\n  답변: {row['content']}" if question else f"- 답변: {row['content']}")
+    if selected:
+        lines.append(f"라포 카드: '{selected['name']}' 선택")
+    elif cards and cards.get("dismissed"):
+        lines.append("라포 카드: 고르지 않음")
+    return "\n".join(lines)
+
+
 # 과거 카드 설명이 사용자 발언처럼 모델에 전달되지 않도록, 정확히 일치하는 자동 기록만 정리한다.
+# 진로 상담이 시작된 뒤에는 알아가기 대화 전문 대신 원문 기록 하나와 상담 구간만 전달한다.
 def history_for_model(rows, state):
     cards = state["rapport"].get("cards")
     selected = next((c for c in cards["offered"] if c["id"] == cards.get("chosen_id")), None) if cards else None
+    start = state.get("career_started_turn")
+    earlier = [row for row in rows if start is not None and row["turn"] < start]
     history = []
+    if any(row["role"] == "user" for row in earlier):
+        history.append({"role": "developer", "content": _rapport_record(earlier, selected, cards)})
+        rows = [row for row in rows if row["turn"] >= start]
     for row in rows:
         content = row["content"]
         if selected and row["role"] == "user":

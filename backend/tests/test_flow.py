@@ -10,7 +10,8 @@ from counseling import controller as C  # noqa: E402
 from counseling.cards import DECK_BY_ID, new_cards  # noqa: E402
 from counseling.career_map import active_criteria  # noqa: E402
 from counseling.flow import (  # noqa: E402
-    INTRO_SUGGESTIONS, apply_input, ensure_flow, history_for_model, suggestions_for_stage, without_card_criteria,
+    INTRO_SUGGESTIONS, apply_input, ensure_flow, enter_career, history_for_model, suggestions_for_stage,
+    without_card_criteria,
 )
 from counseling.state import Classification, empty_state, format_state, merge  # noqa: E402
 from llm.client import Reply  # noqa: E402
@@ -247,3 +248,47 @@ def test_only_generated_card_description_is_sanitized_in_model_history():
     history = history_for_model(rows, state)
     assert history[0]["content"] == f"라포 카드 선택 기록: {card['name']}"
     assert history[1]["content"] == rows[1]["content"]
+
+
+# 진로 상담이 시작된 턴은 처음 한 번만 기록하고, 다시 호출돼도 바꾸지 않는다.
+def test_enter_career_records_start_turn_once():
+    state = empty_state()
+    enter_career(state, 4)
+    enter_career(state, 6)
+    assert state["career_started_turn"] == 4
+
+
+# 진로 상담 뒤에는 알아가기 구간을 질문·답변 원문과 카드 선택 사실로만 전달하고 챗봇의 정리 문장은 뺀다.
+def test_career_history_replaces_rapport_with_verbatim_record():
+    state = career_state()
+    card = DECK_BY_ID[6]
+    state["rapport"]["cards"] = {**new_cards([card], "conversation", 3), "chosen_id": 6}
+    state["career_started_turn"] = 4
+    rows = [
+        {"turn": 0, "role": "assistant", "content": "몇 가지 여쭤봐도 될까요?"},
+        {"turn": 1, "role": "user", "content": "네, 여쭤보세요"},
+        {"turn": 1, "role": "assistant", "content": "가장 재미있었던 경험은 무엇인가요?"},
+        {"turn": 2, "role": "user", "content": "유럽여행을 한달 동안 다녀왔어"},
+        {"turn": 2, "role": "assistant", "content": "낯선 곳의 기억이 오래 남겠네요.\n\n특히 기억에 남는 순간은 무엇이었나요?"},
+        {"turn": 3, "role": "user", "content": "현지 사람들과 이야기한 것"},
+        {"turn": 3, "role": "assistant", "content": "사람과 문화를 탐구하는 성향이 보여요. 아래 카드 중 하나를 골라 주세요."},
+        {"turn": 4, "role": "user", "content": f"'{card['name']}' 카드를 골랐어요."},
+        {"turn": 4, "role": "assistant", "content": "지금 진로와 관련해서 어떤 고민이 있으신가요?"},
+    ]
+    history = history_for_model(rows, state)
+    record = history[0]["content"]
+    assert history[0]["role"] == "developer"
+    assert "- 질문: 가장 재미있었던 경험은 무엇인가요?\n  답변: 유럽여행을 한달 동안 다녀왔어" in record
+    assert "- 질문: 특히 기억에 남는 순간은 무엇이었나요?\n  답변: 현지 사람들과 이야기한 것" in record
+    assert f"라포 카드: '{card['name']}' 선택" in record
+    assert "낯선 곳의 기억" not in record and "탐구하는 성향" not in record
+    assert history[1:] == [{"role": r["role"], "content": r["content"]} for r in rows[7:]]
+
+
+# 알아가기 답변 없이 바로 상담을 시작했다면 기존처럼 전체 기록을 그대로 전달한다.
+def test_career_history_without_rapport_answers_is_unchanged():
+    state = career_state()
+    state["career_started_turn"] = 1
+    rows = [{"turn": 0, "role": "assistant", "content": "몇 가지 여쭤봐도 될까요?"},
+            {"turn": 1, "role": "user", "content": "바로 고민부터 말할게요"}]
+    assert history_for_model(rows, state) == [{"role": r["role"], "content": r["content"]} for r in rows]
