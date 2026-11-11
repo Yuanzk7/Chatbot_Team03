@@ -15,7 +15,7 @@ const STORAGE_KEY = 'career-chat-session-id'
 
 // 화면 전환(이름 화면 ↔ 상담 화면)과 상담 상태를 모두 여기서 관리하고, 화면 컴포넌트에는 값과 동작만 넘긴다
 export default function App() {
-  // 'loading': 저장된 상담 복원 중, 'name': 이름 입력 화면, 'chat': 상담 화면
+  // 'loading': 저장된 상담 복원 중, 'name': 이름 입력 화면, 'chat': 상담 화면(첫 목록 화면 포함)
   const [screen, setScreen] = useState('loading')
   const [name, setName] = useState('')
   const [nameError, setNameError] = useState(null)
@@ -37,8 +37,10 @@ export default function App() {
   const [error, setError] = useState(null)
   // 카드 선택 처리 중 (모델 호출이 있어 전송과 겹치지 않게 막는다)
   const [cardBusy, setCardBusy] = useState(false)
-  // 진로 상담이 시작된 뒤 보고 있는 탭. 알아가기 탭은 읽기 전용이다.
-  const [tab, setTab] = useState('career')
+  // 상담 화면 안에서 'home'(알아가기·진로 상담 목록) 또는 'chat'(고른 채팅)을 보여준다.
+  const [view, setView] = useState('chat')
+  // 지금 들어가 있는 채팅. 진로 상담이 시작된 뒤의 알아가기 채팅은 읽기 전용이다.
+  const [room, setRoom] = useState('rapport')
 
   // 전송·정리·카드 선택 중 하나라도 진행 중이면 전송·정리·새 상담을 모두 막는다
   const busy = pending !== null || summarizing || cardBusy
@@ -49,18 +51,30 @@ export default function App() {
     state?.conversation_stage === 'cards' && state?.rapport?.cards && state.rapport.cards.chosen_id === null && !state.rapport.cards.dismissed
       ? state.rapport.cards
       : null
-  // 진로 상담이 시작되면 알아가기와 진로 상담을 탭으로 나눈다. 이전 버전 상담에는 시작 턴 기록이 없어 나누지 않는다.
+  // 진로 상담 시작 턴으로 두 채팅을 나눈다. 시작 턴 기록이 없는 이전 버전의 진로 상담은 목록 없이 한 채팅으로 보여준다.
   const careerStartedTurn = state?.career_started_turn ?? null
-  const hasTabs = careerStartedTurn != null
-  const readOnly = hasTabs && tab === 'rapport'
-  const visibleMessages = hasTabs
-    ? messages.filter((m) => (m.turn < careerStartedTurn) === readOnly)
-    : messages
-
-  // 진로 상담이 새로 시작되거나 다른 상담을 열면 진로 상담 탭으로 돌아간다.
-  useEffect(() => {
-    setTab('career')
-  }, [careerStartedTurn])
+  const careerStarted = careerStartedTurn != null
+  const hasRooms = careerStarted || state?.conversation_stage !== 'career'
+  const readOnly = careerStarted && room === 'rapport'
+  const visibleMessages = !careerStarted
+    ? messages
+    : messages.filter((m) => (m.turn < careerStartedTurn) === (room === 'rapport'))
+  const rooms = [
+    {
+      key: 'rapport',
+      title: '알아가기',
+      description: '윤이와 서로 알아가는 대화',
+      status: careerStarted ? '완료' : '진행 중',
+      locked: false,
+    },
+    {
+      key: 'career',
+      title: '진로 상담',
+      description: careerStarted ? '진로 고민을 함께 살펴보는 대화' : '알아가기를 마치면 열려요',
+      status: careerStarted ? '진행 중' : '잠김',
+      locked: !careerStarted,
+    },
+  ]
 
   async function startNewSession(preferredName) {
     // 서버가 윤이의 인사를 첫 메시지로 넣어 돌려준다
@@ -76,6 +90,9 @@ export default function App() {
     setPending(null)
     setError(null)
     setInput('')
+    // 새 상담은 목록을 거치지 않고 바로 알아가기 채팅으로 들어간다.
+    setRoom('rapport')
+    setView('chat')
     setScreen('chat')
   }
 
@@ -91,6 +108,9 @@ export default function App() {
           setCareerMap(data.career_map)
           setLastMessageId(data.last_message_id)
           setName(data.state.preferred_name ?? '')
+          // 다시 열면 알아가기·진로 상담 목록부터 보여준다. 나눌 수 없는 이전 버전 진로 상담은 바로 채팅을 연다.
+          const legacyCareer = data.state.career_started_turn == null && data.state.conversation_stage === 'career'
+          setView(legacyCareer ? 'chat' : 'home')
           setScreen('chat')
           return
         } catch (e) {
@@ -157,6 +177,8 @@ export default function App() {
       setMessages((prev) => [...prev, ...added])
       setState(newState)
       setLastMessageId(added[added.length - 1].id)
+      // 카드를 확인하면 진로 상담 채팅으로 바로 들어간다.
+      setRoom('career')
     } catch (e) {
       setError({ message: e.message, retry: null })
     } finally {
@@ -226,7 +248,20 @@ export default function App() {
   return (
     <ChatScreen
       header={{ displayName, busy, onHome: handleHome, onNewSession: handleNewSession }}
-      tabs={hasTabs ? { active: tab, onChange: setTab } : null}
+      nav={
+        hasRooms
+          ? {
+              view,
+              rooms,
+              current: rooms.find((r) => r.key === room),
+              onOpen: (key) => {
+                setRoom(key)
+                setView('chat')
+              },
+              onBack: () => setView('home'),
+            }
+          : null
+      }
       chat={{
         messages: visibleMessages,
         pending: readOnly ? null : pending,

@@ -1,9 +1,12 @@
 import MessageList from '../components/MessageList.jsx'
 import Composer from '../components/Composer.jsx'
 import SidePanel from '../components/panel/SidePanel.jsx'
+import RoomList from '../components/RoomList.jsx'
 
-// 상담 화면: 헤더 + (진로 상담이 시작되면) 알아가기·진로 상담 탭 + 말풍선 목록 + 입력창 + 사용자가 열었을 때의 진로맵.
-export default function ChatScreen({ header, tabs, chat, composer, panel }) {
+// 상담 화면: 헤더 + (알아가기·진로 상담 목록 또는 고른 채팅의 말풍선 목록·입력창) + 사용자가 열었을 때의 진로맵.
+// nav가 없으면(나눌 수 없는 이전 버전 상담) 목록 없이 한 채팅만 보여준다.
+export default function ChatScreen({ header, nav, chat, composer, panel }) {
+  const showHome = nav?.view === 'home'
   return (
     <div className="app">
       <header className="header">
@@ -31,27 +34,22 @@ export default function ChatScreen({ header, tabs, chat, composer, panel }) {
 
       <div className="layout">
         <main className="chat">
-          {tabs && (
-            <div className="stage-tabs" role="tablist">
-              {[
-                ['rapport', '알아가기'],
-                ['career', '진로 상담'],
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  aria-selected={tabs.active === key}
-                  className={`stage-tab${tabs.active === key ? ' active' : ''}`}
-                  onClick={() => tabs.onChange(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+          {showHome ? (
+            <RoomList rooms={nav.rooms} onOpen={nav.onOpen} />
+          ) : (
+            <>
+              {nav && (
+                <div className="chat-nav">
+                  <button type="button" className="secondary back" onClick={nav.onBack}>
+                    ← 목록
+                  </button>
+                  <strong>{nav.current.title}</strong>
+                </div>
+              )}
+              <MessageList {...chat} />
+              <Composer {...composer} />
+            </>
           )}
-          <MessageList {...chat} />
-          <Composer {...composer} />
         </main>
         {panel.open && (
           <SidePanel
