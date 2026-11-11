@@ -69,6 +69,14 @@ def test_recommendation_gate_requires_confirmed_experience_and_criterion():
     assert "recommendation_gate" in plan["triggered_rules"]
 
 
+# 추천이 막힌 턴에만 경험을 특정 분야 방향과 연결하지 말라고 응답 모델에 지시한다.
+def test_closed_gate_tells_reply_not_to_link_experience_to_fields():
+    state = state_with_items()
+    assert "방향과 연결하지 않는다" not in C.format_turn_plan(C.plan_turn(state, signals(), 2))
+    state["criteria"] = []
+    assert "방향과 연결하지 않는다" in C.format_turn_plan(C.plan_turn(state, signals(), 3))
+
+
 # 철회하거나 확신을 유보한 항목은 기존에 확인되었더라도 추천 자격에서 즉시 제외한다.
 @pytest.mark.parametrize("section,status,question", [
     ("experiences", "withdrawn", "gather_experience"),

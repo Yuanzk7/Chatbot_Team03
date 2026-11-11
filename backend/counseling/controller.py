@@ -288,6 +288,8 @@ def format_turn_plan(plan):
             f"요청 유형={plan['request_type']}, 개인화된 추천 허용={plan['allow_recommendation']}.",
             f"허용 근거 id={plan['allowed_basis_ids']}, 경험 id={plan['experience_ids']}, 기준 id={plan['criterion_ids']}.",
         ])
+        if not plan["allow_recommendation"]:
+            lines.append("사용자가 직접 연결하지 않은 경험을 특정 분야·전공·직무 방향과 연결하지 않는다. 분야는 일반 정보로만 설명한다.")
     if plan.get("conversation_stage") in ("intro", "rapport", "cards"):
         lines.append("suggestions는 빈 배열이다. 시작 안내의 두 선택지는 코드가 붙인다.")
     if plan.get("card") and plan["question"] == "career_concern":
