@@ -18,7 +18,7 @@ from llm.client import Reply  # noqa: E402
 def classified(exploration=None, **changes):
     fields = dict(preferred_name=None, new_items=[], updates=[], rapport_category=None, concern_tags=[],
                   rapport_answered_ids=[], rapport_skipped=False, wants_concern_first=False,
-                  request_type="reflection", direction_relation="same", direction_label=None,
+                  request_type="reflection", needs_current_info=False, direction_relation="same", direction_label=None,
                   direction_choice="none", needs_reason=False, follow_up="reflect",
                   rapport_consent=False, concern_provided=True, exploration=exploration)
     fields.update(changes)

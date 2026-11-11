@@ -38,6 +38,7 @@ class ControlledReply:
     exploration: dict | None = None
     warnings: list[str] = field(default_factory=list)
     discarded: dict | None = None
+    searches: int = 0
 
 
 # 상담별 통제 설정과 진행 상태를 만든다. 대화의 turn 번호와 탐색 횟수는 별개다.
@@ -212,7 +213,7 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, restart=F
             "allow_recommendation": bool(experiences and criteria) if enabled else True,
             "allowed_basis_ids": sorted(confirmed), "experience_ids": experiences, "criterion_ids": criteria,
             "fixed_question": None, "triggered_rules": [], "card": card,
-            "concern_now": bool(result and result.concern_provided)}
+            "concern_now": bool(result and result.concern_provided), "web_search": False}
     plan["follow_up"] = result.follow_up if result else "reflect"
     if enabled and not plan["allow_recommendation"]:
         plan["triggered_rules"].append("recommendation_gate")
@@ -228,6 +229,11 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, restart=F
     stage = state["conversation_stage"]
     if result is None or result.follow_up == "close":
         return _finish_plan(state, plan)
+    # 진로 상담에서 최신 정보가 필요한 질문에만 웹 검색을 켠다. 추천 요청은 추천이 허용될 때만 검색하고,
+    # 허용되지 않으면 검색 없이 아래 추천 제한 규칙대로 부족한 경험·기준을 먼저 묻는다.
+    plan["web_search"] = bool(stage == "career" and result.needs_current_info and (
+        result.request_type == "information"
+        or (result.request_type == "recommendation" and plan["allow_recommendation"])))
     if stage == "intro":
         if result.follow_up != "answer_only":
             plan.update(question="intro_permission", fixed_question=INTRO_QUESTION)
@@ -299,6 +305,13 @@ def format_turn_plan(plan):
         lines.append("suggestions는 빈 배열이다. 시작 안내의 두 선택지는 코드가 붙인다.")
     if plan.get("card") and plan["question"] == "career_concern":
         lines.append("진로 상담 화면이 새로 시작된다. 카드를 다시 해석하지 않고 현재 진로 고민을 듣는다.")
+    if plan.get("web_search_failed"):
+        lines.append("웹 검색을 하지 못했다. 최신 정보를 찾지 못했다고 짧게 알리고, 이름·일정 같은 구체적 사실은 추측하지 않고 "
+                     "일반 정보로 이어서 설명한다.")
+    elif plan.get("web_search"):
+        lines.append("이번 턴은 웹 검색을 쓸 수 있다. 검색으로 확인한 사실만 출처 링크와 함께 짧게 전하고, 확인하지 못한 정보는 "
+                     "추측하지 않는다. 찾지 못했으면 찾지 못했다고 알리고 일반 정보로 이어서 설명한다. 정보는 바뀔 수 있으니 "
+                     "공식 페이지에서 확인하도록 안내한다. 개인화된 판단은 이번 턴의 추천 허용 여부와 근거 규칙을 따른다.")
     if plan.get("fixed_question"):
         lines.append("질문은 코드가 붙인다. 먼저 요청에 답하고 question은 null: " + plan["fixed_question"])
     elif plan["question"] == "confirm":
@@ -488,4 +501,6 @@ def decision_record(state, plan, reply):
             "confirm_item_ids": plan.get("confirm_item_ids", []), "used_basis_ids": reply.used_basis_ids,
             "validation_errors": reply.validation_errors, "warnings": reply.warnings,
             "discarded": reply.discarded,
+            "web_search": plan.get("web_search", False), "web_search_failed": plan.get("web_search_failed", False),
+            "searches": reply.searches,
             "exploration_focus": state.get("exploration", {}).get("focus")}

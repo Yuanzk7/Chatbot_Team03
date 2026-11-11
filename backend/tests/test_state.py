@@ -14,7 +14,7 @@ def classification(**kw):
         "preferred_name": None, "new_items": [], "updates": [],
         "rapport_category": None, "concern_tags": [], "rapport_answered_ids": [],
         "rapport_skipped": False, "wants_concern_first": False,
-        "request_type": "reflection", "direction_relation": "none", "direction_choice": "none",
+        "request_type": "reflection", "needs_current_info": False, "direction_relation": "none", "direction_choice": "none",
         "needs_reason": False, "follow_up": "reflect", "rapport_consent": False, "concern_provided": False,
     }
     base.update(kw)

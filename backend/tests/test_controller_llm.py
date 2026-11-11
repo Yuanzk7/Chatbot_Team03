@@ -4,6 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
+import openai
+
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -28,7 +31,7 @@ def career_state():
 def classification(**changes):
     fields = dict(preferred_name=None, new_items=[], updates=[], rapport_category=None,
                   concern_tags=[], rapport_answered_ids=[], rapport_skipped=False,
-                  wants_concern_first=False, request_type="reflection", direction_relation="none",
+                  wants_concern_first=False, request_type="reflection", needs_current_info=False, direction_relation="none",
                   direction_label=None, direction_choice="none", needs_reason=False,
                   follow_up="reflect", rapport_consent=False, concern_provided=False)
     fields.update(changes)
@@ -244,3 +247,35 @@ def test_chosen_card_prompt_uses_current_criterion_status_and_text(status):
         assert "[철회한 정보 (withdrawn)] id 9: 수정한 기준" in prompt
     else:
         assert "id 9: 수정한 기준" in prompt
+
+
+# 검색 턴에는 웹 검색 도구와 검색 1회 제한을 넘기고, 실제 검색 횟수를 판정 기록용으로 남긴다.
+def test_web_search_turn_passes_tool_and_counts_searches(monkeypatch):
+    state = career_state()
+    plan = plan_turn(state, classification(request_type="information", needs_current_info=True), 10)
+    response = SimpleNamespace(output=[SimpleNamespace(type="web_search_call"), SimpleNamespace(type="message")],
+                               output_parsed=reply(content="공식 페이지에서 확인한 연구실 정보예요."))
+    respond = Mock(return_value=response)
+    parse = Mock()
+    monkeypatch.setattr(client, "_respond", respond)
+    monkeypatch.setattr(client, "_parse", parse)
+    result = client.generate_reply(state, [], "UNIST 멀티모달 연구실 알려줘", 10, plan)
+    assert respond.call_args.kwargs == client.WEB_SEARCH_OPTIONS
+    assert "웹 검색을 쓸 수 있다" in respond.call_args.args[0]
+    assert result.searches == 1 and not parse.called
+
+
+# 검색 호출이 실패하면 찾지 못했다고 알리도록 지시를 바꿔 검색 없이 한 번 더 답한다.
+def test_web_search_failure_falls_back_without_search(monkeypatch):
+    state = career_state()
+    plan = plan_turn(state, classification(request_type="information", needs_current_info=True), 10)
+    timeout = openai.APITimeoutError(request=httpx.Request("POST", "https://api.openai.com/v1/responses"))
+    monkeypatch.setattr(client, "_respond", Mock(side_effect=timeout))
+    parse = Mock(return_value=reply(content="최신 정보를 찾지 못했어요. 대신 일반적인 내용을 설명드릴게요."))
+    monkeypatch.setattr(client, "_parse", parse)
+    result = client.generate_reply(state, [], "UNIST 멀티모달 연구실 알려줘", 10, plan)
+    assert plan["web_search_failed"] is True
+    assert "웹 검색을 하지 못했다" in parse.call_args.args[0]
+    assert "웹 검색을 쓸 수 있다" not in parse.call_args.args[0]
+    assert result.searches == 0 and result.content.startswith("최신 정보를 찾지 못했어요")
+

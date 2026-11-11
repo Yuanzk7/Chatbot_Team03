@@ -15,7 +15,7 @@ from counseling.state import empty_state  # noqa: E402
 def signals(**changes):
     fields = {
         "new_items": [], "updates": [], "rapport_answered_ids": [],
-        "request_type": "reflection", "direction_relation": "none",
+        "request_type": "reflection", "needs_current_info": False, "direction_relation": "none",
         "direction_label": None, "direction_choice": "none",
         "relevant_item_ids": [], "deferred_item_ids": [], "needs_reason": False,
         "follow_up": "reflect", "rapport_consent": False, "concern_provided": False,
@@ -587,3 +587,30 @@ def test_ensure_controller_preserves_existing_settings_and_adds_missing_fields()
     assert controller["direction"]["turns"] == 3
     assert controller["direction"]["awaiting_choice"] is False
     assert controller["pending_confirmation_ids"] == []
+
+
+# 최신 정보가 필요한 정보 요청에만 검색을 켜고, 추천 요청은 추천이 허용될 때만 검색한다.
+# 기준이 없는 추천 요청은 검색하지 않고 기준을 먼저 묻는다.
+@pytest.mark.parametrize("request_type,has_criterion,expected", [
+    ("information", False, True),
+    ("recommendation", True, True),
+    ("recommendation", False, False),
+    ("reflection", True, False),
+])
+def test_web_search_only_for_current_info_requests(request_type, has_criterion, expected):
+    state = state_with_items()
+    if not has_criterion:
+        state["criteria"] = []
+    plan = C.plan_turn(state, signals(request_type=request_type, needs_current_info=True), 2)
+    assert plan["web_search"] is expected
+    assert ("웹 검색을 쓸 수 있다" in C.format_turn_plan(plan)) is expected
+    if request_type == "recommendation" and not has_criterion:
+        assert plan["question"] == "gather_criterion"
+
+
+# 최신 정보가 필요 없거나 알아가기 중이면 검색을 켜지 않는다.
+def test_web_search_stays_off_without_current_info_or_outside_career():
+    state = state_with_items()
+    assert C.plan_turn(state, signals(request_type="information"), 2)["web_search"] is False
+    state["conversation_stage"] = "rapport"
+    assert C.plan_turn(state, signals(request_type="information", needs_current_info=True), 3)["web_search"] is False

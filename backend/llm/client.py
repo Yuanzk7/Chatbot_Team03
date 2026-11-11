@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
+import openai
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
@@ -18,6 +19,12 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")  # 프로젝
 MODEL = os.getenv("OPENAI_MODEL", "")
 REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "")
 TIMEOUT_SECONDS = 60
+# 최신 정보가 필요한 턴에만 쓰는 웹 검색 설정. 범위는 제한하지 않고 한국 기준으로 찾으며, 턴당 검색은 한 번이다.
+WEB_SEARCH_OPTIONS = {
+    "tools": [{"type": "web_search", "search_context_size": "low",
+               "user_location": {"type": "approximate", "country": "KR"}}],
+    "max_tool_calls": 1,
+}
 
 
 class LLMConfigError(Exception):
@@ -49,7 +56,8 @@ def _messages(history, user_message):
 
 
 # Pydantic 스키마로 구조화 출력을 받고, 잘못된 JSON이나 미완료 응답을 공통 오류로 변환한다.
-def _parse(instructions, messages, text_format, label):
+# options는 웹 검색처럼 이번 호출에만 붙이는 도구 설정이며, 검색 횟수를 셀 수 있도록 응답 전체를 돌려준다.
+def _respond(instructions, messages, text_format, label, **options):
     """구조화 출력 호출. 파싱·검증 실패와 미완료 응답은 LLMResponseError로 통일한다."""
     client = _client()
     try:
@@ -59,13 +67,19 @@ def _parse(instructions, messages, text_format, label):
             input=messages,
             text_format=text_format,
             **_reasoning_kwargs(),
+            **options,
         )
     except ValueError as e:
         # pydantic ValidationError와 json.JSONDecodeError 모두 ValueError의 하위 클래스
         raise LLMResponseError(f"{label} parse failed: {e}") from e
     if response.status != "completed" or response.output_parsed is None:
         raise LLMResponseError(f"{label} status={response.status}")
-    return response.output_parsed
+    return response
+
+
+# 도구 없이 구조화 출력만 받는 일반 호출.
+def _parse(instructions, messages, text_format, label):
+    return _respond(instructions, messages, text_format, label).output_parsed
 
 
 # 사용자 정보·정정과 함께 요청 유형·탐색 방향·확인 응답을 분류한다. 규칙 판정은 하지 않는다.
@@ -113,15 +127,26 @@ class Reply(BaseModel):
 
 # 컨트롤러 계획을 모델에 전달하고, 근거 검증·고정 질문 조립까지 마친 응답 객체를 반환한다.
 def generate_reply(state, history, user_message, turn, plan):
-    """모델 호출 뒤 추가 API 호출 없이 controller.finalize_reply로 결과를 검사한다."""
-    reply = _parse(
-        SYSTEM_PROMPT
-        + "\n"
-        + TONE_PROMPT.format(name=state.get("preferred_name") or "사용자")
-        + "\n"
-        + format_state(state, turn, plan),
-        _messages(history, user_message),
-        Reply,
-        "reply",
-    )
-    return finalize_reply(state, plan, reply)
+    """모델 호출 뒤 추가 API 호출 없이 controller.finalize_reply로 결과를 검사한다.
+    웹 검색 턴에서 검색 호출이 실패한 경우에만, 찾지 못했다고 알리도록 지시를 바꿔 검색 없이 한 번 더 호출한다."""
+    messages = _messages(history, user_message)
+    searches = 0
+    if plan.get("web_search"):
+        try:
+            response = _respond(_reply_instructions(state, turn, plan), messages, Reply, "reply", **WEB_SEARCH_OPTIONS)
+            reply = response.output_parsed
+            searches = sum(1 for item in response.output if item.type == "web_search_call")
+        except (openai.APIError, LLMResponseError):
+            plan["web_search_failed"] = True
+            reply = _parse(_reply_instructions(state, turn, plan), messages, Reply, "reply")
+    else:
+        reply = _parse(_reply_instructions(state, turn, plan), messages, Reply, "reply")
+    controlled = finalize_reply(state, plan, reply)
+    controlled.searches = searches
+    return controlled
+
+
+# 공통 원칙·말투·이번 턴 계획을 합친 응답 지시. 검색 실패 여부가 바뀌면 다시 만든다.
+def _reply_instructions(state, turn, plan):
+    return (SYSTEM_PROMPT + "\n" + TONE_PROMPT.format(name=state.get("preferred_name") or "사용자")
+            + "\n" + format_state(state, turn, plan))

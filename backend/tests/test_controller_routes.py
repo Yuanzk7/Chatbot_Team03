@@ -48,6 +48,7 @@ def classification(**overrides):
         "rapport_skipped": False,
         "wants_concern_first": False,
         "request_type": "reflection",
+        "needs_current_info": False,
         "direction_relation": "new",
         "direction_label": "반도체 연구",
         "direction_choice": "none",

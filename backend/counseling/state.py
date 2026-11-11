@@ -42,6 +42,8 @@ class Classification(BaseModel):
     wants_concern_first: bool
     # 요청과 탐색 방향은 모델이 분류하고, 카운터·행동은 controller가 결정한다.
     request_type: Literal["information", "recommendation", "reflection"]
+    # 특정 학교·기관의 현재 정보가 필요한 질문인지. 웹 검색을 켤지는 controller가 결정한다.
+    needs_current_info: bool
     direction_relation: Literal["same", "new", "unclear", "none"]
     direction_label: Optional[str] = None
     direction_choice: Literal["continue", "switch", "unsure", "none"]

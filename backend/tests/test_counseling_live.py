@@ -194,3 +194,15 @@ def test_field_interest_is_not_recorded_as_criterion(message, expects_criterion,
     result = client.classify(career_state(with_criterion=False), [], message)
     kinds = [item.kind for item in result.new_items]
     assert ("criterion" in kinds) is expects_criterion, model_outputs
+
+
+# 특정 학교·기관의 현재 정보를 묻는 질문만 최신 정보가 필요하다고 분류해 웹 검색 대상이 되게 한다.
+@pytest.mark.parametrize("message,expected", [
+    ("우리학교(UNIST)의 멀티모달 주제를 맡는 연구실을 알려줘", True),
+    ("KAIST 대학원 원서 마감이 언제야?", True),
+    ("멀티모달 AI가 뭐야?", False),
+    ("대학원과 취업 중에 뭐가 나을지 고민이에요", False),
+])
+def test_current_info_signal_marks_only_time_sensitive_questions(message, expected, model_outputs):
+    result = client.classify(career_state(with_criterion=False), [], message)
+    assert result.needs_current_info is expected, model_outputs
