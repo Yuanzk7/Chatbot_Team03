@@ -182,3 +182,15 @@ def test_exploration_explicit_action_decision(message, status):
     result = client.classify(state, history, message)
     merged, _ = merge(state, result, 2, 2, user_message=message)
     assert merged["exploration"]["actions"][0]["status"] == status, result.model_dump()
+
+
+# 특정 분야·직무에 대한 관심은 선택 기준으로 기록하지 않고, 중요하게 여기는 조건만 기준으로 기록한다.
+@pytest.mark.parametrize("message,expects_criterion", [
+    ("인공지능 쪽에 관심이 있는데 나한테 맞는 분야 하나만 선택해줘", False),
+    ("반도체 공정 엔지니어 직무에 관심이 있어요", False),
+    ("저는 계속 배우면서 성장할 수 있는 환경이 중요해요", True),
+])
+def test_field_interest_is_not_recorded_as_criterion(message, expects_criterion, model_outputs):
+    result = client.classify(career_state(with_criterion=False), [], message)
+    kinds = [item.kind for item in result.new_items]
+    assert ("criterion" in kinds) is expects_criterion, model_outputs
