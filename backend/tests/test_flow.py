@@ -313,3 +313,31 @@ def test_answer_only_in_rapport_still_asks_next_question():
     plan = C.plan_turn(state, classified(follow_up="answer_only", concern_provided=True), 2)
     assert plan["rapport_action"]["type"] == "ask"
     assert plan["rapport_action"]["question"]["id"] == 11
+
+
+# 알아가기 중에는 끝낸다는 말을 막고, 진로 이야기를 미룬다는 안내는 실제로 고민을 말한 턴에만 붙인다.
+@pytest.mark.parametrize("concern,expects_notice", [(False, False), (True, True)])
+def test_rapport_turn_plan_mentions_counseling_only_when_concern_is_raised(concern, expects_notice):
+    state = empty_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"]["questions"] = [{"id": 17, "status": "answered", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    text = C.format_turn_plan(C.plan_turn(state, classified(concern_provided=concern), 2))
+    assert "알아가기를 끝낸다는 말은 하지 않는다" in text
+    assert ("진로 상담에서 다룬다" in text) is expects_notice
+
+
+# 알아가기 중 필수 후속 질문이 빠지면 진로 고민을 묻지 않고 이야기를 더 듣는 질문으로 보완한다.
+def test_missing_follow_up_in_rapport_uses_rapport_fallback_question():
+    state = empty_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"]["questions"] = [{"id": 17, "status": "answered", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    result = classified(new_items=[{"kind": "experience", "text": "맛있는 음식 먹기", "evidence": "맛있는 걸 먹어",
+                                    "status": "confirmed"}])
+    state, _ = merge(state, result, 2, 1)
+    plan = C.plan_turn(state, result, 2)
+    assert plan["question"] == "follow_up"
+    reply = C.finalize_reply(state, plan, generated(question=None, content="맛있는 걸 드시며 푸시는군요."))
+    assert reply.question == C.RAPPORT_FALLBACK_QUESTION
+    assert "고민" not in reply.content

@@ -16,6 +16,8 @@ DIRECTION_LIMIT = 10
 CAREER_CONCERN_QUESTION = "지금 진로와 관련해서 어떤 고민이 있으신가요?"
 RECOMMENDATION_FALLBACK = "지금까지 확인한 경험과 기준만으로는 진로 후보를 추천하기 어려워요."
 RETRY_CONTENT = "답변을 제대로 만들지 못했어요. 같은 내용을 한 번 더 보내 주시면 다시 답할게요."
+# 알아가기 중 필수 질문이 빠졌을 때 붙이는 질문. 진로 고민을 묻는 일반 질문은 알아가기에 맞지 않는다.
+RAPPORT_FALLBACK_QUESTION = "그 이야기를 조금 더 들려주실 수 있나요?"
 RECOMMENDATION_ERRORS = {"recommendation_not_allowed", "recommendation_missing_confirmed_basis"}
 QUESTION_MARKS = ("?", "？")
 _QUOTED = re.compile(r"‘[^’\n]*’|“[^”\n]*”|'[^'\n]*'|\"[^\"\n]*\"|「[^」\n]*」|『[^』\n]*』")
@@ -208,7 +210,8 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None):
             "controller_enabled": enabled, "request_type": result.request_type if result else "reflection",
             "allow_recommendation": bool(experiences and criteria) if enabled else True,
             "allowed_basis_ids": sorted(confirmed), "experience_ids": experiences, "criterion_ids": criteria,
-            "fixed_question": None, "triggered_rules": [], "card": card}
+            "fixed_question": None, "triggered_rules": [], "card": card,
+            "concern_now": bool(result and result.concern_provided)}
     plan["follow_up"] = result.follow_up if result else "reflect"
     if enabled and not plan["allow_recommendation"]:
         plan["triggered_rules"].append("recommendation_gate")
@@ -274,9 +277,12 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None):
 def format_turn_plan(plan):
     lines = ["## 이번 턴의 질문", f"대화 단계: {plan.get('conversation_stage', 'rapport')}"]
     if plan.get("conversation_stage") == "rapport":
-        # 알아가기는 중단할 수 없으므로 진로 설명·조언을 미루고 지정 질문을 반드시 하게 한다.
-        lines.append("알아가기 단계다. 정보 요청이나 진로 고민이 있어도 설명·조언은 하지 않는다. content는 받아 두는 말 한두 문장으로, "
-                     "고민은 알아가기를 마친 뒤 진로 상담에서 다룬다고 안내한다.")
+        # 알아가기 마무리는 코드가 정한다. 진로 이야기를 미룬다는 안내는 이번에 실제로 고민·요청을 말한 턴에만 한다.
+        line = "알아가기 단계다. 알아가기를 끝낸다는 말은 하지 않는다."
+        if plan["request_type"] != "reflection" or plan.get("concern_now"):
+            line += (" 이번 요청이나 진로 고민에 대한 설명·조언은 하지 않고, 알아가기를 마친 뒤 진로 상담에서 다룬다고 "
+                     "한 문장으로 안내한다.")
+        lines.append(line)
     if plan.get("controller_enabled"):
         lines.extend([
             f"요청 유형={plan['request_type']}, 개인화된 추천 허용={plan['allow_recommendation']}.",
@@ -389,7 +395,9 @@ def finalize_reply(state, plan, reply):
         # 필수 질문만 빠졌다면 설명을 버리지 않고 질문만 보완한다.
         warnings.append("missing_question")
         action_q = plan["rapport_action"].get("question")
-        question = action_q["text"] if action_q else "지금 이야기에서 가장 고민되는 점은 무엇인가요?"
+        question = action_q["text"] if action_q else (
+            RAPPORT_FALLBACK_QUESTION if plan.get("conversation_stage") == "rapport"
+            else "지금 이야기에서 가장 고민되는 점은 무엇인가요?")
         fallback_rapport_id = action_q["id"] if action_q else None
     if question:
         question, extra = _split_extra_questions(question)
@@ -412,7 +420,9 @@ def finalize_reply(state, plan, reply):
         question = plan.get("fixed_question")
         if requires_question and not question:
             action_q = plan["rapport_action"].get("question")
-            question = (action_q["text"] if action_q else "지금 이야기에서 가장 중요하게 느끼는 점은 무엇인가요?")
+            question = action_q["text"] if action_q else (
+                RAPPORT_FALLBACK_QUESTION if plan.get("conversation_stage") == "rapport"
+                else "지금 이야기에서 가장 중요하게 느끼는 점은 무엇인가요?")
             # 코드가 원래 라포 질문을 직접 전달했다면 실제로 물은 질문으로 기록한다.
             fallback_rapport_id = action_q["id"] if action_q else None
         if plan["rapport_action"]["type"] == "wrap_up":
