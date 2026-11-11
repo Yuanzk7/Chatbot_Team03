@@ -172,3 +172,20 @@ def test_turn_limit_wraps_up_even_if_questions_remain():
     assert r["done"] and r["end_reason"] == "turn_limit"
     assert R.choose_action(r, R.TURN_LIMIT)["type"] == "wrap_up"
     assert R.choose_action(r, R.TURN_LIMIT + 1)["type"] == "none"
+
+
+# 알아가기를 다시 하면 이미 물은 질문을 빼고 새 질문을 고르며, 턴 제한은 다시 시작한 턴부터 센다.
+def test_restart_picks_new_questions_and_counts_turn_limit_from_restart():
+    first = R.empty_rapport()
+    R.open_with_default(first)
+    first = R.apply_classification(first, signals(rapport_category="values", concern_tags=["stability"],
+                                                  rapport_answered_ids=[R.DEFAULT_OPENER_ID]), turn=1, rng=rng())
+    first["cards"] = {"offered": [{"id": 6, "name": "새 길 탐험가"}], "chosen_id": 6, "dismissed": False}
+    asked_before = {q["id"] for q in first["questions"]}
+    again = R.restart(first, turn=20, rng=rng())
+    assert again["start_turn"] == 20 and not again["done"]
+    assert again["previous_card"]["id"] == 6 and again["cards"] is None
+    assert again["questions"] and not {q["id"] for q in again["questions"]} & asked_before
+    assert set(again["past_ids"]) == asked_before
+    assert not R.apply_classification(again, signals(), turn=21, rng=rng())["done"]
+    assert R.apply_classification(again, signals(), turn=26, rng=rng())["end_reason"] == "turn_limit"

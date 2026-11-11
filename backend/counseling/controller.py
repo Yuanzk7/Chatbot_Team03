@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from counseling import exploration
 from counseling.flow import (
-    INTRO_QUESTION, apply_input, conversation_items, ensure_flow, enter_career, suggestions_for_stage,
+    INTRO_QUESTION, apply_input, conversation_items, ensure_flow, enter_career, restart_rapport, suggestions_for_stage,
 )
 from counseling.rapport import choose_action
 
@@ -192,9 +192,10 @@ def _finish_plan(state, plan):
 
 # 동의·카드 확인으로 단계를 전환하고, 세 통제 규칙과 이번 질문 하나를 결정한다.
 # 일반 상담의 후속 질문은 선택이다. 라포·해석 확인·방향 점검 등 필요한 질문만 필수로 지정한다.
-def plan_turn(state, result, turn, current_rapport_id=None, card=None):
+def plan_turn(state, result, turn, current_rapport_id=None, card=None, restart=False):
     """state는 아직 저장하지 않은 상담 상태, result는 LLM 분류, turn은 대화 쌍의 번호다.
-    card는 카드를 확인하고 진로 상담을 시작하는 UI 이벤트로, 탐색 횟수를 증가시키지 않는다.
+    card는 카드를 확인하고 진로 상담을 시작하는 UI 이벤트, restart는 알아가기를 다시 시작하는 UI 이벤트로,
+    둘 다 탐색 횟수를 증가시키지 않는다.
     반환 계획의 제약은 답변 전체에 적용하고 question/fixed_question은 질문 하나를 지정한다.
     """
     controller = ensure_controller(state)
@@ -219,6 +220,10 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None):
         enter_career(state, turn)
         plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
+        return _finish_plan(state, plan)
+    if restart:
+        restart_rapport(state, turn)
+        plan.update(question="rapport", rapport_action=choose_action(state["rapport"], turn))
         return _finish_plan(state, plan)
     stage = state["conversation_stage"]
     if result is None or result.follow_up == "close":

@@ -264,6 +264,7 @@ def test_only_generated_card_description_is_sanitized_in_model_history():
 def test_enter_career_records_start_turn_once():
     state = empty_state()
     enter_career(state, 4)
+    assert state["room_switches"] == [{"room": "career", "turn": 4}]
     enter_career(state, 6)
     assert state["career_started_turn"] == 4
 
@@ -341,3 +342,38 @@ def test_missing_follow_up_in_rapport_uses_rapport_fallback_question():
     reply = C.finalize_reply(state, plan, generated(question=None, content="맛있는 걸 드시며 푸시는군요."))
     assert reply.question == C.RAPPORT_FALLBACK_QUESTION
     assert "고민" not in reply.content
+
+
+# 알아가기를 두 번 했다면 진로 상담에는 두 알아가기의 원문 기록 하나와 진로 상담 구간만 전달하고,
+# 다시 하는 중에는 이번 알아가기 구간만 전달한다.
+def test_history_after_restarted_rapport_keeps_rooms_apart():
+    state = career_state()
+    state["career_started_turn"] = 2
+    state["room_switches"] = [{"room": "career", "turn": 2}, {"room": "rapport", "turn": 4},
+                              {"room": "career", "turn": 6}]
+    rows = [
+        {"turn": 0, "role": "assistant", "content": "가장 재미있었던 경험은 무엇인가요?"},
+        {"turn": 1, "role": "user", "content": "유럽 여행"},
+        {"turn": 1, "role": "assistant", "content": "아래 카드를 보여드릴게요."},
+        {"turn": 2, "role": "user", "content": "진로 상담을 시작할게요."},
+        {"turn": 2, "role": "assistant", "content": "어떤 고민이 있으신가요?"},
+        {"turn": 3, "role": "user", "content": "대학원 분야를 못 정했어요"},
+        {"turn": 3, "role": "assistant", "content": "분야별 연구 방식을 비교해 볼 수 있어요."},
+        {"turn": 4, "role": "user", "content": "알아가기를 다시 할게요."},
+        {"turn": 4, "role": "assistant", "content": "다시 알아가 볼게요.\n\n혼자 있을 때 주로 무엇을 하시나요?"},
+        {"turn": 5, "role": "user", "content": "게임을 해요"},
+        {"turn": 5, "role": "assistant", "content": "카드를 아래에 보여드릴게요."},
+        {"turn": 6, "role": "user", "content": "인공지능 쪽이 궁금해요"},
+    ]
+    history = history_for_model(rows, state)
+    record = history[0]["content"]
+    assert history[0]["role"] == "developer"
+    assert "답변: 유럽 여행" in record and "- 질문: 혼자 있을 때 주로 무엇을 하시나요?\n  답변: 게임을 해요" in record
+    assert "알아가기를 다시 할게요." not in record
+    assert [h["content"] for h in history[1:]] == [
+        "진로 상담을 시작할게요.", "어떤 고민이 있으신가요?", "대학원 분야를 못 정했어요",
+        "분야별 연구 방식을 비교해 볼 수 있어요.", "인공지능 쪽이 궁금해요"]
+    state["conversation_stage"] = "rapport"
+    state["room_switches"] = state["room_switches"][:2]
+    assert [h["content"] for h in history_for_model(rows[:10], state)] == [
+        "알아가기를 다시 할게요.", "다시 알아가 볼게요.\n\n혼자 있을 때 주로 무엇을 하시나요?", "게임을 해요"]

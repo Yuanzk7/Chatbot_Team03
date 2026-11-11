@@ -15,7 +15,14 @@ export default function ChatScreen({ header, nav, chat, composer, panel }) {
           <p>나의 진로를 찾아가는 대화</p>
         </button>
         <div className="header-right">
-          <span className="user-name">{header.displayName}님</span>
+          <span className="user-name">
+            {header.displayName}님
+            {header.card && (
+              <span className="user-card" title={header.card.meaning}>
+                {header.card.emoji} {header.card.name}
+              </span>
+            )}
+          </span>
           <button
             type="button"
             className={`secondary panel-toggle${panel.open ? ' open' : ''}`}

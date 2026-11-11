@@ -45,3 +45,6 @@ export const chooseCard = (sessionId, cardId) =>
     method: 'POST',
     body: JSON.stringify({ card_id: cardId }),
   })
+
+export const restartRapport = (sessionId) =>
+  request(`/api/sessions/${sessionId}/rapport/restart`, { method: 'POST' })

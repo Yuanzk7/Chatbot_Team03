@@ -79,6 +79,7 @@ def stub_models(monkeypatch, result=None):
     (messages, messages.send_message, {"request": messages.MessageRequest(content="상담", request_id="outage")}),
     (summary, summary.summarize_session, {}),
     (cards, cards.choose_card, {"request": cards.CardChoiceRequest(card_id=1)}),
+    (cards, cards.restart_rapport, {}),
 ])
 def test_database_connection_failure_releases_session_lock(monkeypatch, module, handler, kwargs):
     session_id = "db-outage-" + handler.__name__
@@ -391,6 +392,46 @@ def test_request_to_skip_rapport_shows_card_before_counseling(database, monkeypa
     assert state["career_concern_received"] is True
     assert "career_started_turn" not in state
     assert response["message"]["suggestions"] == []
+
+
+# 진로 상담 중에 알아가기를 다시 하면 새 질문으로 시작하고, 새 카드를 확인하면 메시지 없이 진로 상담으로 돌아간다.
+def test_restart_rapport_then_confirm_new_card_returns_to_career(session_id, monkeypatch):
+    with db.get_db() as conn:
+        state, next_id = load_state(conn, session_id)
+        state["career_started_turn"] = 1
+        state["rapport"]["questions"] = [{"id": 17, "text": "경험", "status": "answered", "asks": 1, "holds": 0}]
+        state["rapport"]["cards"] = {**card_deck.new_cards([card_deck.DECK_BY_ID[6]], "conversation", 0), "chosen_id": 6}
+        save_state(conn, session_id, state, next_id)
+    scripted_models(monkeypatch, [])
+    restarted = cards.restart_rapport(session_id)
+    state = restarted["state"]
+    assert [m["content"] for m in restarted["messages"][:1]] == ["알아가기를 다시 할게요."]
+    assert state["conversation_stage"] == "rapport" and state["career_started_turn"] == 1
+    assert state["room_switches"][-1] == {"room": "rapport", "turn": restarted["messages"][0]["turn"]}
+    assert 17 not in {q["id"] for q in state["rapport"]["questions"]}
+    assert any(q["status"] == "asked" for q in state["rapport"]["questions"])
+    assert state["rapport"]["previous_card"]["id"] == 6
+    with db.get_db() as conn:
+        state, next_id = load_state(conn, session_id)
+        state["conversation_stage"] = "cards"
+        state["rapport"].update(done=True, done_turn=2, end_reason="completed")
+        state["rapport"]["cards"] = card_deck.new_cards([card_deck.DECK_BY_ID[2]], "conversation", 2)
+        save_state(conn, session_id, state, next_id)
+    before = len(sessions.get_session(session_id)["messages"])
+    returned = cards.choose_card(session_id, cards.CardChoiceRequest(card_id=2))
+    assert returned["messages"] == []
+    assert returned["state"]["conversation_stage"] == "career"
+    assert returned["state"]["room_switches"][-1]["room"] == "career"
+    assert returned["state"]["rapport"]["cards"]["chosen_id"] == 2
+    assert len(sessions.get_session(session_id)["messages"]) == before
+
+
+# 진로 상담이 시작되기 전에는 알아가기를 다시 시작할 수 없다.
+def test_restart_rapport_requires_career_stage(database):
+    created = sessions.create_session(sessions.SessionRequest(preferred_name="유찬"))
+    with pytest.raises(HTTPException) as error:
+        cards.restart_rapport(created["session_id"])
+    assert error.value.status_code == 422
 
 
 # 이전 버전에 저장된 라포 후보 세 개도 새로고침하면 감추고, DB 원문은 조회만으로 수정하지 않는다.

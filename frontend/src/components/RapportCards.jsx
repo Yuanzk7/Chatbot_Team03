@@ -6,7 +6,7 @@ function cardImage(id) {
   return images[`../assets/cards/card-${id}.webp`] ?? null
 }
 
-export default function RapportCards({ cards, busy, onStart }) {
+export default function RapportCards({ cards, busy, onStart, startLabel }) {
   const card = cards.offered[0]
   const src = cardImage(card.id)
   return (
@@ -29,7 +29,7 @@ export default function RapportCards({ cards, busy, onStart }) {
       </div>
       <div className="cards-actions">
         <button type="button" onClick={() => onStart(card.id)} disabled={busy}>
-          진로 상담 시작하기
+          {startLabel}
         </button>
       </div>
     </div>

@@ -96,6 +96,9 @@ def empty_rapport():
         "done_turn": None,      # done으로 바뀐 턴 (그 턴에만 마무리 지시를 넣는다)
         "cards": None,          # 챗봇이 정한 라포 카드 {offered, source, chosen_id, dismissed, turn} (cards.py)
         "last_follow_up_turn": None,  # 사용자 이야기에 후속 질문을 한 턴. 연속 두 턴은 하지 않는다
+        "start_turn": 0,        # 이번 알아가기가 시작된 턴. 다시 할 때 턴 제한을 여기서부터 센다
+        "past_ids": [],         # 이전 알아가기에서 이미 물은 질문 id. 다시 할 때 제외한다
+        "previous_card": None,  # 다시 하기 전에 확인한 카드. 새 카드를 확인하기 전까지 화면에 보여준다
     }
 
 
@@ -120,6 +123,22 @@ def select_questions(category, tags, exclude_ids, limit, rng=random):
 
 def current_question(rapport):
     return next((q for q in rapport["questions"] if q["status"] == "asked"), None)
+
+
+# 진로 상담 중에 알아가기를 다시 시작한다. 이전 범주·태그는 이어 쓰고, 이미 물은 질문은 빼고 새 질문을 고른다.
+def restart(rapport, turn, rng=random):
+    past = set(rapport.get("past_ids", [])) | {q["id"] for q in rapport["questions"]}
+    cards = rapport.get("cards")
+    chosen = next((c for c in cards["offered"] if c["id"] == cards.get("chosen_id")), None) if cards else None
+    r = empty_rapport()
+    r.update(category=rapport["category"], tags=list(rapport["tags"]), start_turn=turn, past_ids=sorted(past),
+             previous_card=chosen or rapport.get("previous_card"))
+    picked = select_questions(r["category"], r["tags"], past, MAX_QUESTIONS, rng)
+    if not picked:
+        pool = [q for q in QUESTIONS if q["id"] not in past and not q["light"]]
+        picked = rng.sample(pool, min(MAX_QUESTIONS, len(pool)))
+    r["questions"] = [_entry(q) for q in picked]
+    return r
 
 
 # 첫 인사에 붙여 묻는 기본 질문을 이미 물은 질문으로 넣는다. 알아가기는 동의 단계 없이 바로 시작한다.
@@ -147,7 +166,7 @@ def apply_classification(rapport, signals, turn, rng=random):
         # 알아가기를 건너뛰지는 않는다. 남은 질문만 줄이고 이번 턴에 마무리해 카드를 보여준다.
         _finish(r, "user_requested", turn)
         return r
-    if turn >= TURN_LIMIT:
+    if turn - r.get("start_turn", 0) >= TURN_LIMIT:
         # 사용자가 자기 이야기를 계속 꺼내 질문이 보류되더라도, 이 시점이면 마무리하고 카드를 보여준다
         _finish(r, "turn_limit", turn)
         return r
@@ -159,7 +178,7 @@ def apply_classification(rapport, signals, turn, rng=random):
             r["tags"].append(t)
 
     # 질문 선별: 정보가 생기면 최대 5개까지 채우고, 정보가 없으면 가벼운 질문 하나로 시작
-    have = {q["id"] for q in r["questions"]}
+    have = {q["id"] for q in r["questions"]} | set(r.get("past_ids", []))
     if len(r["questions"]) < MAX_QUESTIONS and (r["category"] or r["tags"]):
         for q in select_questions(r["category"], r["tags"], have, MAX_QUESTIONS - len(r["questions"]), rng):
             r["questions"].append(_entry(q))
