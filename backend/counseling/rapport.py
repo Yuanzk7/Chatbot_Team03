@@ -92,9 +92,9 @@ def empty_rapport():
         "tags": [],             # 고민에서 드러난 주제 태그
         "questions": [],        # {id, text, status, asks}
         "done": False,
-        "end_reason": None,     # completed | user_requested
+        "end_reason": None,     # completed | turn_limit | user_requested(상담 재촉으로 일찍 마무리)
         "done_turn": None,      # done으로 바뀐 턴 (그 턴에만 마무리 지시를 넣는다)
-        "cards": None,          # 라포 카드 제시 {offered, source, chosen_id, dismissed, turn} (cards.py)
+        "cards": None,          # 챗봇이 정한 라포 카드 {offered, source, chosen_id, dismissed, turn} (cards.py)
         "last_follow_up_turn": None,  # 사용자 이야기에 후속 질문을 한 턴. 연속 두 턴은 하지 않는다
     }
 
@@ -122,13 +122,20 @@ def current_question(rapport):
     return next((q for q in rapport["questions"] if q["status"] == "asked"), None)
 
 
+# 첫 인사에 붙여 묻는 기본 질문을 이미 물은 질문으로 넣는다. 알아가기는 동의 단계 없이 바로 시작한다.
+def open_with_default(rapport):
+    q = _entry(QUESTIONS_BY_ID[DEFAULT_OPENER_ID])
+    q.update(status="asked", asks=1)
+    rapport["questions"].append(q)
+
+
 def _finish(rapport, reason, turn):
     rapport["done"] = True
     rapport["end_reason"] = reason
     rapport["done_turn"] = turn
 
 
-# 동의 후 시작한 라포 질문의 답변·개별 건너뛰기·완료를 반영한다. 전체 중단은 flow에서 상담 전환으로 처리한다.
+# 라포 질문의 답변·개별 건너뛰기·완료를 반영한다. 상담을 재촉하면 남은 질문을 줄여 카드 단계로 넘긴다.
 def apply_classification(rapport, signals, turn, rng=random):
     """분류 호출 결과(signals: rapport_category, concern_tags, rapport_answered_ids, rapport_skipped,
     wants_concern_first)를 반영한다. 모델이 보고한 id는 이 상담에서 뽑힌 질문에 속할 때만 쓴다."""
@@ -137,6 +144,7 @@ def apply_classification(rapport, signals, turn, rng=random):
         return r
 
     if signals.wants_concern_first:
+        # 알아가기를 건너뛰지는 않는다. 남은 질문만 줄이고 이번 턴에 마무리해 카드를 보여준다.
         _finish(r, "user_requested", turn)
         return r
     if turn >= TURN_LIMIT:
@@ -184,11 +192,11 @@ def _skip_current_and_check(r, cur, turn):
 def choose_action(rapport, turn, hold=False):
     """응답 생성 전에 다음 행동을 고른다. 답이 없는 현재 질문을 먼저 처리하고, 너무 여러 번 물은 질문은 건너뛴다.
     hold=True면 이번 턴에는 다른 질문(해석 확인·사용자 발언 후속)을 하므로 라포 질문을 보류한다.
-    돌려주는 action: {"type": "ask"|"continue"|"hold"|"wrap_up"|"concern"|"none", "question": {...}|None}"""
+    돌려주는 action: {"type": "ask"|"continue"|"hold"|"wrap_up"|"none", "question": {...}|None}"""
     r = rapport
     if r["done"]:
         if r["done_turn"] == turn:
-            return {"type": "concern" if r["end_reason"] == "user_requested" else "wrap_up", "question": None}
+            return {"type": "wrap_up", "question": None}
         return {"type": "none", "question": None}
 
     cur = current_question(r)
@@ -241,11 +249,11 @@ def format_rapport(rapport, action):
         lines.append(f"지정 질문 (id {q['id']}): {q['text']}")
         if t == "continue":
             lines.append("아직 답하지 않은 질문이다. 같은 문장을 반복하지 말고 답할 기회나 건너뛰기를 안내한다.")
-        lines.append(f"지정 질문을 말투에 맞게 바꾸어 question에만 쓰고 asked_question_id={q['id']}로 둔다. 별도 답변이 없으면 content는 빈 문자열이다. 직접 요청에 먼저 답하느라 미루면 question과 asked_question_id 모두 null이다.")
+        lines.append(f"지정 질문을 말투에 맞게 바꾸어 question에만 쓰고 asked_question_id={q['id']}로 둔다. 별도 답변이 없으면 content는 빈 문자열이다.")
     elif t == "wrap_up":
-        lines.append("알아가기 단계가 끝났다. 경험과 기준을 짧게 되짚고 아래 카드 중 하나를 고르도록 안내한다.")
-        lines.append("rapport_cards는 대화 근거가 있는 카드를 최대 3장 고르고 evidence에 사용자 발언을 짧게 인용한다. 근거 없이 채우지 않는다.")
+        lines.append("알아가기 단계가 끝났다. 경험과 기준을 짧게 되짚고, 대화를 보고 고른 카드 한 장을 아래에 보여준다고 안내한다. 카드 이름과 설명은 화면에 따로 표시되므로 content에 쓰지 않는다.")
+        if rapport["end_reason"] == "user_requested":
+            lines.append("사용자가 진로 상담을 원해 남은 알아가기 질문을 줄였다. 진로 조언은 아직 하지 않고, 카드를 확인하면 바로 진로 상담으로 이어간다고 안내한다.")
+        lines.append("rapport_cards에는 대화와 가장 가까운 카드 1장을 반드시 고른다. 근거가 되는 사용자 발언이 있으면 evidence에 짧게 인용하고, 없으면 evidence는 비운다.")
         lines.append(deck_text())
-    elif t == "concern":
-        lines.append("알아가기를 중단하고 카드 없이 진로 상담으로 전환한다. 이미 말한 고민이 있으면 답하고, 없으면 현재 고민을 묻는다.")
     return "\n".join(lines)

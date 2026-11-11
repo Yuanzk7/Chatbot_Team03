@@ -25,8 +25,6 @@ export default function MessageList({
   onRetry,
   onPickSuggestion,
   onChooseCard,
-  onReshuffle,
-  onDismiss,
 }) {
   const bottomRef = useRef(null)
   const showSuggestions = conversationStage === 'intro' || conversationStage === 'career'
@@ -46,13 +44,7 @@ export default function MessageList({
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
               </div>
               {idx === messages.length - 1 && !pending && pendingCards && (
-                <RapportCards
-                  cards={pendingCards}
-                  busy={busy}
-                  onChoose={onChooseCard}
-                  onReshuffle={onReshuffle}
-                  onDismiss={onDismiss}
-                />
+                <RapportCards cards={pendingCards} busy={busy} onStart={onChooseCard} />
               )}
               {/* 마지막 답변에만 예시 답변 칩을 보여준다. 누르면 입력창에 들어가고 고쳐서 보낼 수 있다 */}
               {idx === messages.length - 1 && !pending && !pendingCards && showSuggestions && m.suggestions?.length > 0 && (
@@ -91,7 +83,7 @@ export default function MessageList({
       {cardBusy && (
         <div className="row assistant">
           <Avatar />
-          <div className="bubble assistant typing">카드를 보고 있어요…</div>
+          <div className="bubble assistant typing">진로 상담을 준비하고 있어요…</div>
         </div>
       )}
       {error && (

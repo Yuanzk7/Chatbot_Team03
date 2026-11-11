@@ -15,7 +15,6 @@ from counseling import cards as card_deck  # noqa: E402
 from counseling import exploration  # noqa: E402
 from counseling.career_map import CareerMapOutput  # noqa: E402
 from counseling.controller import ControlledReply  # noqa: E402
-from counseling.flow import INTRO_SUGGESTIONS  # noqa: E402
 from counseling.state import Classification  # noqa: E402
 from llm import client  # noqa: E402
 from llm.client import LLMResponseError  # noqa: E402
@@ -80,8 +79,6 @@ def stub_models(monkeypatch, result=None):
     (messages, messages.send_message, {"request": messages.MessageRequest(content="상담", request_id="outage")}),
     (summary, summary.summarize_session, {}),
     (cards, cards.choose_card, {"request": cards.CardChoiceRequest(card_id=1)}),
-    (cards, cards.reshuffle_cards, {}),
-    (cards, cards.dismiss_cards, {}),
 ])
 def test_database_connection_failure_releases_session_lock(monkeypatch, module, handler, kwargs):
     session_id = "db-outage-" + handler.__name__
@@ -359,16 +356,20 @@ def scripted_models(monkeypatch, results):
     return mock
 
 
-# 새 상담에는 두 선택지만 있고 동의 후에는 실제 DB 저장·복원에서도 라포 후보가 없어야 한다.
-def test_intro_and_consent_persist_free_text_rapport(database, monkeypatch):
+# 새 상담은 동의 단계 없이 첫 인사에서 기본 질문을 묻고, 답한 뒤에도 라포 후보 답변을 저장·표시하지 않는다.
+def test_new_session_asks_first_rapport_question_without_suggestions(database, monkeypatch):
     created = sessions.create_session(sessions.SessionRequest(preferred_name="유찬"))
-    assert created["message"]["suggestions"] == INTRO_SUGGESTIONS
-    assert created["state"]["conversation_stage"] == "intro"
-    scripted_models(monkeypatch, [flow_classification(rapport_consent=True)])
+    assert created["message"]["suggestions"] == []
+    assert created["message"]["content"].endswith("지금까지 해본 것 중에 가장 재미있었던 경험은 무엇인가요?")
+    assert created["state"]["conversation_stage"] == "rapport"
+    assert [(q["id"], q["status"]) for q in created["state"]["rapport"]["questions"]] == [(17, "asked")]
+    scripted_models(monkeypatch, [flow_classification(rapport_answered_ids=[17], rapport_category="taste",
+                                                      concern_tags=["interest"])])
     response = messages.send_message(created["session_id"], messages.MessageRequest(
-        content="네, 여쭤보세요", request_id="consent"))
+        content="유럽여행을 한 달 동안 다녀온 게 제일 재밌었어요", request_id="first-answer"))
     restored = sessions.get_session(created["session_id"])
     assert response["state"]["conversation_stage"] == "rapport"
+    assert response["state"]["rapport"]["questions"][0]["status"] == "answered"
     assert response["message"]["suggestions"] == []
     assert restored["messages"][-1]["suggestions"] == []
     with db.get_db() as conn:
@@ -376,66 +377,20 @@ def test_intro_and_consent_persist_free_text_rapport(database, monkeypatch):
         assert json.loads(stored["suggestions"]) == []
 
 
-# 첫 안내에서 바로 상담을 원하면 카드 없이 현재 고민을 묻는 답변을 저장한다.
-def test_skip_intro_enters_counseling_without_offering_cards(database, monkeypatch):
+# 알아가기 중에 바로 상담하자고 재촉하면 남은 질문을 줄여 카드 한 장을 보여주고, 진로 상담은 카드 확인 뒤에 시작한다.
+def test_request_to_skip_rapport_shows_card_before_counseling(database, monkeypatch):
     created = sessions.create_session(sessions.SessionRequest(preferred_name="유찬"))
-    parsed = scripted_models(monkeypatch, [flow_classification(wants_concern_first=True)])
+    scripted_models(monkeypatch, [flow_classification(wants_concern_first=True, concern_provided=True,
+                                                      request_type="information")])
     response = messages.send_message(created["session_id"], messages.MessageRequest(
-        content="바로 고민부터 말할게요", request_id="direct-career"))
-    assert response["state"]["conversation_stage"] == "career"
-    assert response["state"]["rapport"]["cards"] is None
-    assert response["message"]["content"].endswith("지금 진로와 관련해서 어떤 고민이 있으신가요?")
-    assert "카드 선택을 짧게 받아들이고" not in parsed.call_args.args[0]
-
-
-# 라포 중 진로 고민을 함께 말하며 중단하면 일반적인 고민 질문을 다시 하지 않고 그 고민부터 다룬다.
-def test_stop_rapport_with_actual_concern_does_not_reask_it(database, monkeypatch):
-    created = sessions.create_session(sessions.SessionRequest(preferred_name="유찬"))
-    scripted_models(monkeypatch, [flow_classification(rapport_consent=True),
-                                 flow_classification(wants_concern_first=True, concern_provided=True,
-                                                     request_type="information")])
-    messages.send_message(created["session_id"], messages.MessageRequest(content="네", request_id="start"))
-    response = messages.send_message(created["session_id"], messages.MessageRequest(
-        content="질문은 그만하고 연구와 실무 중 어떤 길이 좋을지 이야기하고 싶어요", request_id="stop-rapport"))
-    assert response["state"]["conversation_stage"] == "career"
-    assert response["state"]["rapport"]["cards"] is None
-    assert all(q["status"] == "skipped" for q in response["state"]["rapport"]["questions"])
-    assert response["state"]["controller"]["last_question"]["type"] == "optional"
-    assert "지금 진로와 관련해서 어떤 고민이 있으신가요?" not in response["message"]["content"]
-    assert response["message"]["suggestions"]
-
-
-# 이미 제시된 카드를 건너뛰면 다음 상담 질문까지 저장하고, UI에 추가할 메시지 두 개를 반환한다.
-def test_card_dismiss_returns_next_question_and_restores_it(session_id, monkeypatch):
-    with db.get_db() as conn:
-        state, next_id = load_state(conn, session_id)
-        state["conversation_stage"] = "cards"
-        state["rapport"]["cards"] = card_deck.new_cards(card_deck.random_offer(), "random", 0)
-        save_state(conn, session_id, state, next_id)
-    scripted_models(monkeypatch, [])
-    response = cards.dismiss_cards(session_id)
-    restored = sessions.get_session(session_id)
-    assert len(response["messages"]) == 2
-    assert response["messages"][-1]["content"].endswith("지금 진로와 관련해서 어떤 고민이 있으신가요?")
-    assert response["state"]["rapport"]["cards"]["dismissed"] is True
-    assert response["state"]["conversation_stage"] == "career"
-    assert response["state"]["criteria"] == []
-    assert restored["messages"][-1] == response["messages"][-1]
-    assert len(restored["controller_events"]) == 1
-
-
-# 건너뛰기 응답을 받지 못한 경우에도 카드를 닫은 상태만 먼저 저장되지 않는다.
-def test_card_dismiss_failure_rolls_back_transition(session_id, monkeypatch):
-    with db.get_db() as conn:
-        state, next_id = load_state(conn, session_id)
-        state["conversation_stage"] = "cards"
-        state["rapport"]["cards"] = card_deck.new_cards(card_deck.random_offer(), "random", 0)
-        save_state(conn, session_id, state, next_id)
-    before = sessions.get_session(session_id)
-    monkeypatch.setattr(cards, "generate_reply", Mock(side_effect=LLMResponseError("실패")))
-    with pytest.raises(HTTPException):
-        cards.dismiss_cards(session_id)
-    assert sessions.get_session(session_id) == before
+        content="질문은 그만하고 연구와 실무 중 어떤 길이 좋을지 이야기하고 싶어요", request_id="skip-rapport"))
+    state = response["state"]
+    assert state["conversation_stage"] == "cards"
+    assert state["rapport"]["end_reason"] == "user_requested"
+    assert len(state["rapport"]["cards"]["offered"]) == 1
+    assert state["career_concern_received"] is True
+    assert "career_started_turn" not in state
+    assert response["message"]["suggestions"] == []
 
 
 # 이전 버전에 저장된 라포 후보 세 개도 새로고침하면 감추고, DB 원문은 조회만으로 수정하지 않는다.

@@ -45,14 +45,14 @@ def career_state():
     return state
 
 
-# 초기 동의 전에는 알아가기 질문을 먼저 꺼내지 않고 두 후보만 안내한다.
-def test_intro_waits_for_consent_and_has_exactly_two_suggestions():
+# 이전 상담의 동의 단계가 남아 있어도 알아가기를 건너뛰는 후보는 내보내지 않는다.
+def test_legacy_intro_offers_only_consent_suggestion():
     state = empty_state()
     plan = C.plan_turn(state, classified(), 1)
     reply = C.finalize_reply(state, plan, generated())
     assert state["conversation_stage"] == "intro"
     assert state["rapport"]["questions"] == []
-    assert reply.suggestions == ["네, 여쭤보세요", "바로 고민부터 말할게요"]
+    assert reply.suggestions == ["네, 여쭤보세요"]
 
 
 # 동의하면 라포를 시작하지만, 그때부터 모델이 만든 후보 답변은 저장·표시하지 않는다.
@@ -66,27 +66,26 @@ def test_consent_starts_free_text_rapport_without_suggestions():
     assert reply.suggestions == []
 
 
-# '바로 고민부터'는 카드 선택까지 강제하지 않고, 실제 고민이 없을 때만 주제를 묻는다.
+# 상담을 재촉하지 않고 고민만 먼저 말했다면 알아가기를 이어가고, 말한 고민은 기억한다.
 @pytest.mark.parametrize("provided", [True, False])
-def test_direct_counseling_skips_questions_and_cards(provided):
+def test_rapport_continues_when_user_shares_concern_first(provided):
     state = empty_state()
-    plan = C.plan_turn(state, classified(wants_concern_first=True, concern_provided=provided,
-                                       request_type="information"), 1)
-    assert state["conversation_stage"] == "career"
-    assert state["rapport"]["done"] is True
-    assert state["rapport"]["cards"] is None
-    assert state["controller"]["pending_card_offer"] is None
-    assert plan["question"] == ("optional" if provided else "career_concern")
-    assert bool(plan["fixed_question"]) is (not provided)
+    state["conversation_stage"] = "rapport"
+    state["rapport"]["questions"] = [{"id": 17, "status": "asked", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    C.plan_turn(state, classified(concern_provided=provided, request_type="information"), 2)
+    assert state["conversation_stage"] == "rapport"
+    assert state["rapport"]["done"] is False
+    assert state["career_concern_received"] is provided
 
 
-# 첫 안내에서 이미 진로 고민을 말했다면 동의를 다시 요구하지 않고 그 고민부터 다룬다.
-def test_concern_at_intro_enters_career_without_reasking_permission():
+# 이전 상담의 동의 단계에서 고민을 먼저 말하면 동의로 보고 알아가기를 시작하며 고민은 기억한다.
+def test_concern_at_legacy_intro_starts_rapport():
     state = empty_state()
     plan = C.plan_turn(state, classified(concern_provided=True), 1)
-    assert plan["question"] == "optional"
-    assert state["conversation_stage"] == "career"
+    assert state["conversation_stage"] == "rapport"
     assert state["career_concern_received"] is True
+    assert plan["rapport_action"]["type"] == "ask"
 
 
 # 고민 배경을 덧붙였더라도 알아가기 질문에 명시적으로 동의했다면 그 선택을 우선한다.
@@ -98,18 +97,30 @@ def test_explicit_consent_with_concern_starts_rapport_and_remembers_concern():
     assert plan["rapport_action"]["type"] == "ask"
 
 
-# 라포 전체 중단 시 미완료 질문·카드를 닫되 기존 진로 확인 대기와 기록은 잃지 않는다.
-def test_stop_rapport_preserves_information_but_cancels_remaining_questions_and_cards():
+# 상담을 재촉하면 남은 질문을 줄여 바로 카드 단계로 넘기되, 카드 없이 진로 상담을 시작하지는 않는다.
+def test_request_for_counseling_moves_to_cards_not_career():
     state = empty_state()
     state["conversation_stage"] = "rapport"
-    state["rapport"]["questions"] = [{"id": 17, "status": "asked", "text": "경험", "asks": 1}]
-    state["rapport"]["cards"] = new_cards([DECK_BY_ID[1]], "random", 1)
-    state["controller"]["pending_card_offer"] = "wrap_up"
-    apply_input(state, classified(wants_concern_first=True), 2)
-    assert state["rapport"]["questions"][0]["status"] == "skipped"
-    assert state["rapport"]["cards"]["dismissed"] is True
-    assert state["controller"]["pending_card_offer"] is None
-    assert state["conversation_stage"] == "career"
+    state["rapport"]["questions"] = [{"id": 17, "status": "asked", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    plan = C.plan_turn(state, classified(wants_concern_first=True, concern_provided=True,
+                                       follow_up="answer_only", request_type="information"), 2)
+    assert plan["rapport_action"]["type"] == "wrap_up"
+    assert state["conversation_stage"] == "cards"
+    assert state["career_concern_received"] is True
+    assert "career_started_turn" not in state
+
+
+# 카드 단계에서 고민을 입력해도 상담으로 넘어가지 않는다. 상담은 카드를 확인하는 버튼으로만 시작한다.
+def test_concern_at_card_stage_does_not_start_career():
+    state = empty_state()
+    state["conversation_stage"] = "cards"
+    state["rapport"].update(done=True, done_turn=1, end_reason="completed")
+    state["rapport"]["cards"] = new_cards([DECK_BY_ID[1]], "conversation", 1)
+    apply_input(state, classified(concern_provided=True), 2)
+    assert state["conversation_stage"] == "cards"
+    assert state["career_concern_received"] is True
+    assert "career_started_turn" not in state
 
 
 # 한 질문 건너뛰기를 라포 전체 중단으로 해석하지 않는다.
@@ -168,13 +179,12 @@ def test_answer_only_and_close_do_not_force_questions(follow_up):
     assert state["controller"]["direction"]["turns"] == 10
 
 
-# 이미 고민을 받은 상태에서 카드를 고르거나 넘기면 일반적인 고민 질문을 반복하지 않는다.
-@pytest.mark.parametrize("selected", [True, False])
-def test_card_transition_does_not_reask_known_concern(selected):
+# 이미 고민을 받은 상태에서 카드를 확인하고 상담을 시작하면 일반적인 고민 질문을 반복하지 않는다.
+def test_card_transition_does_not_reask_known_concern():
     state = career_state()
     state["conversation_stage"] = "cards"
     state["career_concern_received"] = True
-    plan = C.plan_turn(state, None, 5, card=DECK_BY_ID[1] if selected else None, career_entry=not selected)
+    plan = C.plan_turn(state, None, 5, card=DECK_BY_ID[1])
     assert plan["question"] == "optional"
     assert plan["fixed_question"] is None
     assert state["criteria"] == []
@@ -210,7 +220,7 @@ def test_legacy_card_criterion_is_background_not_recommendation_basis():
     assert plan["question"] == "gather_criterion"
     assert active_criteria(state) == []
     prompt = format_state(state)
-    assert "[라포에서 선택한 카드 — 배경정보]" in prompt
+    assert "[라포 카드 — 챗봇이 대화를 보고 고른 배경정보]" in prompt
     assert "id 4:" not in prompt
     career_map = {"criteria": [{"id": 4}], "candidates": [{"name": "연구", "by_criteria": [{"criterion_id": 4}]}]}
     cleaned = without_card_criteria(career_map, state)
@@ -272,7 +282,7 @@ def test_career_history_replaces_rapport_with_verbatim_record():
         {"turn": 2, "role": "assistant", "content": "낯선 곳의 기억이 오래 남겠네요.\n\n특히 기억에 남는 순간은 무엇이었나요?"},
         {"turn": 3, "role": "user", "content": "현지 사람들과 이야기한 것"},
         {"turn": 3, "role": "assistant", "content": "사람과 문화를 탐구하는 성향이 보여요. 아래 카드 중 하나를 골라 주세요."},
-        {"turn": 4, "role": "user", "content": f"'{card['name']}' 카드를 골랐어요."},
+        {"turn": 4, "role": "user", "content": "진로 상담을 시작할게요."},
         {"turn": 4, "role": "assistant", "content": "지금 진로와 관련해서 어떤 고민이 있으신가요?"},
     ]
     history = history_for_model(rows, state)
@@ -280,7 +290,7 @@ def test_career_history_replaces_rapport_with_verbatim_record():
     assert history[0]["role"] == "developer"
     assert "- 질문: 가장 재미있었던 경험은 무엇인가요?\n  답변: 유럽여행을 한달 동안 다녀왔어" in record
     assert "- 질문: 특히 기억에 남는 순간은 무엇이었나요?\n  답변: 현지 사람들과 이야기한 것" in record
-    assert f"라포 카드: '{card['name']}' 선택" in record
+    assert f"라포 카드: '{card['name']}' (챗봇이 대화를 보고 고른 카드)" in record
     assert "낯선 곳의 기억" not in record and "탐구하는 성향" not in record
     assert history[1:] == [{"role": r["role"], "content": r["content"]} for r in rows[7:]]
 
@@ -292,3 +302,14 @@ def test_career_history_without_rapport_answers_is_unchanged():
     rows = [{"turn": 0, "role": "assistant", "content": "몇 가지 여쭤봐도 될까요?"},
             {"turn": 1, "role": "user", "content": "바로 고민부터 말할게요"}]
     assert history_for_model(rows, state) == [{"role": r["role"], "content": r["content"]} for r in rows]
+
+
+# 알아가기 중에 '질문은 그만'처럼 설명만 원해도 알아가기는 중단되지 않고 다음 질문을 이어간다.
+def test_answer_only_in_rapport_still_asks_next_question():
+    state = empty_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"]["questions"] = [{"id": 17, "status": "answered", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    plan = C.plan_turn(state, classified(follow_up="answer_only", concern_provided=True), 2)
+    assert plan["rapport_action"]["type"] == "ask"
+    assert plan["rapport_action"]["question"]["id"] == 11

@@ -192,5 +192,5 @@ def format_state(state, turn=None, plan=None):
     if cards and cards.get("chosen_id"):
         chosen = next((c for c in cards["offered"] if c["id"] == cards["chosen_id"]), None)
         if chosen:
-            lines.append(f"[라포에서 선택한 카드 — 배경정보] {chosen['name']}: {chosen['meaning']}")
+            lines.append(f"[라포 카드 — 챗봇이 대화를 보고 고른 배경정보] {chosen['name']}: {chosen['meaning']}")
     return "\n".join(lines)

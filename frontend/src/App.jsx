@@ -3,9 +3,7 @@ import {
   ApiError,
   chooseCard,
   createSession,
-  dismissCards,
   getSession,
-  reshuffleCards,
   sendMessage,
   summarize,
 } from './api'
@@ -39,6 +37,8 @@ export default function App() {
   const [error, setError] = useState(null)
   // 카드 선택 처리 중 (모델 호출이 있어 전송과 겹치지 않게 막는다)
   const [cardBusy, setCardBusy] = useState(false)
+  // 진로 상담이 시작된 뒤 보고 있는 탭. 알아가기 탭은 읽기 전용이다.
+  const [tab, setTab] = useState('career')
 
   // 전송·정리·카드 선택 중 하나라도 진행 중이면 전송·정리·새 상담을 모두 막는다
   const busy = pending !== null || summarizing || cardBusy
@@ -49,6 +49,18 @@ export default function App() {
     state?.conversation_stage === 'cards' && state?.rapport?.cards && state.rapport.cards.chosen_id === null && !state.rapport.cards.dismissed
       ? state.rapport.cards
       : null
+  // 진로 상담이 시작되면 알아가기와 진로 상담을 탭으로 나눈다. 이전 버전 상담에는 시작 턴 기록이 없어 나누지 않는다.
+  const careerStartedTurn = state?.career_started_turn ?? null
+  const hasTabs = careerStartedTurn != null
+  const readOnly = hasTabs && tab === 'rapport'
+  const visibleMessages = hasTabs
+    ? messages.filter((m) => (m.turn < careerStartedTurn) === readOnly)
+    : messages
+
+  // 진로 상담이 새로 시작되거나 다른 상담을 열면 진로 상담 탭으로 돌아간다.
+  useEffect(() => {
+    setTab('career')
+  }, [careerStartedTurn])
 
   async function startNewSession(preferredName) {
     // 서버가 윤이의 인사를 첫 메시지로 넣어 돌려준다
@@ -108,7 +120,7 @@ export default function App() {
     setPending({ content, requestId })
     try {
       const { message, state: newState } = await sendMessage(sessionId, content, requestId)
-      setMessages((prev) => [...prev, { id: `user-${requestId}`, role: 'user', content }, message])
+      setMessages((prev) => [...prev, { id: `user-${requestId}`, role: 'user', content, turn: message.turn }, message])
       setState(newState)
       setLastMessageId(message.id)
       setPending(null)
@@ -145,25 +157,6 @@ export default function App() {
       setMessages((prev) => [...prev, ...added])
       setState(newState)
       setLastMessageId(added[added.length - 1].id)
-    } catch (e) {
-      setError({ message: e.message, retry: null })
-    } finally {
-      setCardBusy(false)
-    }
-  }
-
-  // 다시 뽑기는 카드만 갱신하고, 건너뛰기는 서버가 돌려준 상담 시작 메시지까지 함께 반영한다.
-  async function handleCardsAction(action) {
-    if (busy || !sessionId) return
-    setCardBusy(true)
-    setError(null)
-    try {
-      const { state: newState, messages: added = [] } = await action(sessionId)
-      setState(newState)
-      if (added.length > 0) {
-        setMessages((prev) => [...prev, ...added])
-        setLastMessageId(added[added.length - 1].id)
-      }
     } catch (e) {
       setError({ message: e.message, retry: null })
     } finally {
@@ -233,21 +226,30 @@ export default function App() {
   return (
     <ChatScreen
       header={{ displayName, busy, onHome: handleHome, onNewSession: handleNewSession }}
+      tabs={hasTabs ? { active: tab, onChange: setTab } : null}
       chat={{
-        messages,
-        pending,
-        cardBusy,
-        error,
+        messages: visibleMessages,
+        pending: readOnly ? null : pending,
+        cardBusy: !readOnly && cardBusy,
+        error: readOnly ? null : error,
         busy,
         pendingCards,
         conversationStage: state?.conversation_stage,
         onRetry: handleRetry,
         onPickSuggestion: setInput,
         onChooseCard: handleChooseCard,
-        onReshuffle: () => handleCardsAction(reshuffleCards),
-        onDismiss: () => handleCardsAction(dismissCards),
       }}
-      composer={{ value: input, onChange: setInput, onSubmit: handleSubmit, disabled: !sessionId || busy }}
+      composer={{
+        value: input,
+        onChange: setInput,
+        onSubmit: handleSubmit,
+        disabled: !sessionId || busy || Boolean(pendingCards) || readOnly,
+        placeholder: pendingCards
+          ? '카드를 확인하고 진로 상담을 시작해 주세요'
+          : readOnly
+            ? '알아가기 대화는 읽기만 할 수 있어요'
+            : undefined,
+      }}
       panel={{
         open: mapOpen,
         onToggle: () => setMapOpen((cur) => !cur),

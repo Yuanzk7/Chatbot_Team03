@@ -5,14 +5,16 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from counseling.flow import INTRO_SUGGESTIONS
+from counseling.rapport import open_with_default
 from counseling.state import empty_state
 from routes.common import load_career_map, load_controller_events, load_messages, load_state, require_session
 from storage.db import get_db
 
 router = APIRouter()
 
-GREETING = "안녕하세요, {name}님. 윤이입니다. 진로상담을 시작하기 전에 먼저 {name}님에 대해 알아가고 싶어요. 몇 가지 여쭤봐도 될까요?"
+# 동의를 묻지 않고 첫 알아가기 질문(기본 질문)을 인사에 바로 붙인다.
+GREETING = ("안녕하세요, {name}님. 윤이입니다. 진로상담을 시작하기 전에 먼저 {name}님에 대해 알아가고 싶어요. "
+            "지금까지 해본 것 중에 가장 재미있었던 경험은 무엇인가요?")
 
 
 class SessionRequest(BaseModel):
@@ -21,7 +23,7 @@ class SessionRequest(BaseModel):
     controller_enabled: bool = True
 
 
-# 이름으로 상담을 만들고 통제 활성화 설정과 첫 인사를 함께 저장한다.
+# 이름으로 상담을 만들고 통제 활성화 설정과 첫 알아가기 질문이 담긴 인사를 함께 저장한다.
 # controller_enabled는 상담별로 보관하므로 다른 상담의 실험 설정에 영향을 주지 않는다.
 @router.post("/api/sessions")
 def create_session(request: SessionRequest):
@@ -33,7 +35,9 @@ def create_session(request: SessionRequest):
     state = empty_state()
     state["preferred_name"] = name
     state["controller"]["enabled"] = request.controller_enabled
-    suggestions = list(INTRO_SUGGESTIONS)
+    state["conversation_stage"] = "rapport"
+    open_with_default(state["rapport"])
+    suggestions = []
     content = GREETING.format(name=name)
     conn = get_db()
     try:

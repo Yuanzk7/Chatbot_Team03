@@ -235,7 +235,7 @@ def test_chosen_card_prompt_uses_current_criterion_status_and_text(status):
         "offered": [{"id": 1, "name": "카드 이름", "meaning": "과거 해석", "criterion": "최초 기준"}],
     }
     prompt = format_state(state)
-    assert "[라포에서 선택한 카드 — 배경정보]" in prompt
+    assert "[라포 카드 — 챗봇이 대화를 보고 고른 배경정보]" in prompt
     assert "[중심 기준 카드]" not in prompt
     assert "카드 이름: 과거 해석" in prompt
     if status == "withdrawn":

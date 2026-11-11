@@ -1,7 +1,7 @@
-"""라포 카드: 고정 덱 15장 중 3장을 제시한다. 선택은 배경정보이며 진로 기준으로 자동 확정하지 않는다."""
+"""라포 카드: 고정 덱 15장 중 챗봇이 대화를 보고 1장을 정한다. 배경정보이며 진로 기준으로 자동 확정하지 않는다."""
 import random
 
-MAX_OFFERED = 3
+MAX_OFFERED = 1
 
 
 def _c(i, emoji, name, tagline, meaning, criterion):
@@ -59,7 +59,7 @@ def random_offer(exclude_ids=(), rng=random):
 
 
 def offer_from_picks(picks, rng=random):
-    """모델이 고른 (card_id, evidence) 목록을 검증한다. 덱에 없는 id·중복은 버리고, 3장이 안 되면 무작위로 채운다."""
+    """모델이 고른 (card_id, evidence) 목록을 검증한다. 덱에 없는 id·중복은 버리고, 유효한 카드가 없으면 무작위로 채운다."""
     offered, seen = [], set()
     for p in picks:
         card = DECK_BY_ID.get(p.card_id)

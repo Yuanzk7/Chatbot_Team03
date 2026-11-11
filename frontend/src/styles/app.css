@@ -313,6 +313,27 @@ button.persona img {
   background: #c53030;
 }
 
+/* ---------- 알아가기 / 진로 상담 탭 ---------- */
+.stage-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--blue-line);
+}
+
+button.stage-tab {
+  background: none;
+  color: var(--muted);
+  border-radius: 12px 12px 0 0;
+  border-bottom: 2px solid transparent;
+}
+
+button.stage-tab.active {
+  color: var(--blue-dark);
+  font-weight: 600;
+  border-bottom-color: var(--blue);
+}
+
 /* 프로필: 스티커처럼 흰 테두리 */
 .avatar {
   position: relative;
@@ -359,7 +380,7 @@ button.suggestion:hover:not(:disabled) {
   background: var(--blue-soft);
 }
 
-/* 라포 카드 고르기 */
+/* 라포 카드: 윤이가 고른 한 장 */
 .rapport-cards {
   display: flex;
   flex-direction: column;
@@ -373,14 +394,9 @@ button.suggestion:hover:not(:disabled) {
   color: var(--muted);
 }
 
-.cards-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-button.rapport-card {
+.rapport-card {
   display: flex;
+  max-width: 220px;
   flex-direction: column;
   align-items: center;
   gap: 6px;
@@ -390,13 +406,6 @@ button.rapport-card {
   border: 2px solid var(--blue-line);
   border-radius: 18px;
   text-align: center;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
-}
-
-button.rapport-card:hover:not(:disabled) {
-  transform: translateY(-3px);
-  border-color: var(--blue);
-  box-shadow: var(--shadow);
 }
 
 .card-image {
@@ -424,7 +433,7 @@ button.rapport-card:hover:not(:disabled) {
   color: var(--blue-dark);
 }
 
-button.rapport-card strong {
+.rapport-card strong {
   font-size: 15px;
   color: var(--blue-dark);
 }
@@ -446,13 +455,6 @@ button.rapport-card strong {
   display: flex;
   gap: 8px;
   align-items: center;
-}
-
-button.link {
-  background: none;
-  color: var(--muted);
-  padding: 6px 8px;
-  text-decoration: underline;
 }
 
 /* ---------- 입력창 ---------- */
@@ -691,10 +693,6 @@ button.summarize.stale {
 
   .bubble {
     max-width: 90%;
-  }
-
-  .cards-grid {
-    grid-template-columns: 1fr;
   }
 
   .row.assistant {

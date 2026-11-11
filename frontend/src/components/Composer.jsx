@@ -1,5 +1,5 @@
 // 입력창. Enter 전송, Shift+Enter 줄바꿈, 한글 조합 중 Enter는 무시
-export default function Composer({ value, onChange, onSubmit, disabled }) {
+export default function Composer({ value, onChange, onSubmit, disabled, placeholder }) {
   return (
     <form className="composer" onSubmit={onSubmit}>
       <textarea
@@ -11,7 +11,7 @@ export default function Composer({ value, onChange, onSubmit, disabled }) {
             onSubmit(e)
           }
         }}
-        placeholder="메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)"
+        placeholder={placeholder ?? '메시지를 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)'}
         rows={2}
         disabled={disabled}
       />

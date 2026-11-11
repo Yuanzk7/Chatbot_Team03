@@ -1,13 +1,14 @@
-"""시작 안내 → 자유응답 라포 → 카드 → 진로 상담의 전환과 이전 상담 호환을 관리한다.
+"""첫 인사의 알아가기 질문 → 자유응답 라포 → 챗봇이 정한 카드 → 진로 상담의 전환과 이전 상담 호환을 관리한다.
 
-카드 선택은 배경정보다. 진로 기준과 근거 계산에는 사용자가 대화로 확인한 항목만 사용한다.
+카드는 배경정보다. 진로 기준과 근거 계산에는 사용자가 대화로 확인한 항목만 사용한다.
 이 모듈은 DB에 쓰지 않으며, 상태 변경의 저장은 요청 처리에 성공한 라우트가 담당한다.
 """
 from counseling.cards import pending
 from counseling.rapport import apply_classification
 
 INTRO_QUESTION = "몇 가지 여쭤봐도 될까요?"
-INTRO_SUGGESTIONS = ["네, 여쭤보세요", "바로 고민부터 말할게요"]
+# 새 상담은 첫 인사에서 바로 알아가기 질문을 한다. 동의 단계는 이전 상담을 이어갈 때만 남는다.
+INTRO_SUGGESTIONS = ["네, 여쭤보세요"]
 STAGES = ("intro", "rapport", "cards", "career")
 
 
@@ -56,39 +57,31 @@ def conversation_items(state, key=None):
     return [item for section in keys for item in state[section] if item.get("source") != "rapport_card"]
 
 
-# 라포 질문과 아직 고르지 않은 카드를 끝내고 진로 상담으로 이동한다. 확인 대기·탐색 횟수는 보존한다.
-def enter_career(state, turn, reason="user_requested"):
+# 카드를 확인한 뒤 남은 라포 질문을 정리하고 진로 상담으로 이동한다. 확인 대기·탐색 횟수는 보존한다.
+def enter_career(state, turn, reason="card_selected"):
     rapport = state["rapport"]
     if not rapport["done"]:
         rapport.update(done=True, end_reason=reason, done_turn=turn)
     for question in rapport["questions"]:
         if question["status"] in ("pending", "asked"):
             question["status"] = "skipped"
-    cards = rapport.get("cards")
-    if pending(cards):
-        cards["dismissed"] = True
     state["controller"]["pending_card_offer"] = None
     state["conversation_stage"] = "career"
     # 화면 구분과 모델 입력 정리에 쓰도록 진로 상담이 시작된 턴을 처음 한 번만 기록한다.
     state.setdefault("career_started_turn", turn)
 
 
-# 분류된 동의·중단·고민 신호를 반영한다. 한 질문 건너뛰기와 라포 전체 중단은 별도로 처리한다.
+# 분류된 동의·고민 신호를 반영한다. 고민을 먼저 말해도 알아가기를 이어가며, 상담은 카드를 확인한 뒤 시작한다.
+# 상담을 재촉하면 rapport가 남은 질문을 줄여 카드 단계로 넘기지만, 카드 없이 상담으로 가는 길은 두지 않는다.
 def apply_input(state, result, turn):
     stage = ensure_flow(state)
     if result.follow_up == "close":
         return
     if result.concern_provided:
         state["career_concern_received"] = True
-    if result.wants_concern_first and stage != "career":
-        enter_career(state, turn)
-        return
-    if stage == "intro" and result.rapport_consent:
+    if stage == "intro" and (result.rapport_consent or result.concern_provided or result.wants_concern_first):
         state["conversation_stage"] = "rapport"
         stage = "rapport"
-    elif stage in ("intro", "cards") and result.concern_provided:
-        enter_career(state, turn)
-        return
     if stage == "rapport":
         state["rapport"] = apply_classification(state["rapport"], result, turn)
 
@@ -105,7 +98,7 @@ def suggestions_for_stage(state, suggestions, has_question=True):
 
 # 알아가기 구간을 질문·사용자 답변 원문과 카드 선택 사실로만 정리한다.
 # 챗봇이 덧붙인 해석·정리 문장은 넣지 않는다. 질문은 코드가 답변 끝에 붙인 마지막 문단에서 가져온다.
-def _rapport_record(rows, selected, cards):
+def _rapport_record(rows, selected):
     lines = ["## 진로 상담 전 알아가기 대화", "질문과 사용자 답변 원문이다. 챗봇이 덧붙인 해석과 정리는 뺐다."]
     question = None
     for row in rows:
@@ -115,9 +108,7 @@ def _rapport_record(rows, selected, cards):
         else:
             lines.append(f"- 질문: {question}\n  답변: {row['content']}" if question else f"- 답변: {row['content']}")
     if selected:
-        lines.append(f"라포 카드: '{selected['name']}' 선택")
-    elif cards and cards.get("dismissed"):
-        lines.append("라포 카드: 고르지 않음")
+        lines.append(f"라포 카드: '{selected['name']}' (챗봇이 대화를 보고 고른 카드)")
     return "\n".join(lines)
 
 
@@ -130,7 +121,7 @@ def history_for_model(rows, state):
     earlier = [row for row in rows if start is not None and row["turn"] < start]
     history = []
     if any(row["role"] == "user" for row in earlier):
-        history.append({"role": "developer", "content": _rapport_record(earlier, selected, cards)})
+        history.append({"role": "developer", "content": _rapport_record(earlier, selected)})
         rows = [row for row in rows if row["turn"] >= start]
     for row in rows:
         content = row["content"]

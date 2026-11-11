@@ -45,9 +45,3 @@ export const chooseCard = (sessionId, cardId) =>
     method: 'POST',
     body: JSON.stringify({ card_id: cardId }),
   })
-
-export const reshuffleCards = (sessionId) =>
-  request(`/api/sessions/${sessionId}/cards/reshuffle`, { method: 'POST' })
-
-export const dismissCards = (sessionId) =>
-  request(`/api/sessions/${sessionId}/cards/dismiss`, { method: 'POST' })

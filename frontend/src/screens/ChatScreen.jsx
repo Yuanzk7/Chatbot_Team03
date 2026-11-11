@@ -2,8 +2,8 @@ import MessageList from '../components/MessageList.jsx'
 import Composer from '../components/Composer.jsx'
 import SidePanel from '../components/panel/SidePanel.jsx'
 
-// 상담 화면: 헤더 + 말풍선 목록 + 입력창 + 사용자가 열었을 때의 진로맵.
-export default function ChatScreen({ header, chat, composer, panel }) {
+// 상담 화면: 헤더 + (진로 상담이 시작되면) 알아가기·진로 상담 탭 + 말풍선 목록 + 입력창 + 사용자가 열었을 때의 진로맵.
+export default function ChatScreen({ header, tabs, chat, composer, panel }) {
   return (
     <div className="app">
       <header className="header">
@@ -31,6 +31,25 @@ export default function ChatScreen({ header, chat, composer, panel }) {
 
       <div className="layout">
         <main className="chat">
+          {tabs && (
+            <div className="stage-tabs" role="tablist">
+              {[
+                ['rapport', '알아가기'],
+                ['career', '진로 상담'],
+              ].map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={tabs.active === key}
+                  className={`stage-tab${tabs.active === key ? ' active' : ''}`}
+                  onClick={() => tabs.onChange(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <MessageList {...chat} />
           <Composer {...composer} />
         </main>

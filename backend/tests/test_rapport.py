@@ -55,11 +55,25 @@ def test_info_later_fills_up_to_max():
     assert len({q["id"] for q in r["questions"]}) == R.MAX_QUESTIONS
 
 
-def test_concern_first_ends_rapport_without_questions():
-    r = R.apply_classification(R.empty_rapport(), signals(wants_concern_first=True), turn=1, rng=rng())
-    assert r["done"] and r["end_reason"] == "user_requested" and r["questions"] == []
-    assert R.choose_action(r, 1)["type"] == "concern"
+# 상담을 재촉하면 남은 질문을 줄여 그 턴에 마무리하고 카드 단계로 넘긴다. 다음 턴에는 다시 마무리하지 않는다.
+def test_request_for_counseling_wraps_up_rapport_early():
+    r = R.empty_rapport()
+    R.open_with_default(r)
+    r = R.apply_classification(r, signals(wants_concern_first=True), turn=1, rng=rng())
+    assert r["done"] and r["end_reason"] == "user_requested" and r["done_turn"] == 1
+    assert R.choose_action(r, 1)["type"] == "wrap_up"
     assert R.choose_action(r, 2)["type"] == "none"
+
+
+# 첫 인사에 붙인 기본 질문은 이미 물은 질문이고, 첫 답변의 정보로 나머지 질문을 채운다.
+def test_greeting_opener_is_asked_and_first_answer_fills_questions():
+    r = R.empty_rapport()
+    R.open_with_default(r)
+    assert R.current_question(r)["id"] == R.DEFAULT_OPENER_ID
+    r = R.apply_classification(r, signals(rapport_category="unist", concern_tags=["academic"],
+                                          rapport_answered_ids=[R.DEFAULT_OPENER_ID]), turn=1, rng=rng())
+    assert r["questions"][0]["status"] == "answered" and not r["done"]
+    assert len(r["questions"]) == R.MAX_QUESTIONS
 
 
 def seeded():

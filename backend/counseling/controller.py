@@ -172,7 +172,7 @@ def plan_rapport_turn(state, result, turn, current_rapport_id=None, check_confir
 # 우선 질문과 카드 제시가 겹치면 카드를 보류한다. 다음 일반 턴에 다시 제시할 수 있도록 기록한다.
 def _hold_rapport(state, turn):
     action = choose_action(state["rapport"], turn, hold=True)
-    if action["type"] in ("wrap_up", "concern"):
+    if action["type"] == "wrap_up":
         state["controller"]["pending_card_offer"] = action["type"]
     return {"type": "none" if state["rapport"]["done"] else "hold", "question": None}
 
@@ -183,25 +183,20 @@ def _finish_plan(state, plan):
     if action == "wrap_up":
         state["conversation_stage"] = "cards"
         plan["question"] = "none"
-    elif action == "concern":
-        enter_career(state, plan["turn"])
-        plan["rapport_action"] = {"type": "none", "question": None}
-        plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
-        plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
     plan["conversation_stage"] = state["conversation_stage"]
     plan["exploration"] = exploration.plan_turn(state, plan)
     return plan
 
 
-# 동의·중단·카드 선택으로 단계를 전환하고, 세 통제 규칙과 이번 질문 하나를 결정한다.
+# 동의·카드 확인으로 단계를 전환하고, 세 통제 규칙과 이번 질문 하나를 결정한다.
 # 일반 상담의 후속 질문은 선택이다. 라포·해석 확인·방향 점검 등 필요한 질문만 필수로 지정한다.
-def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_entry=False):
+def plan_turn(state, result, turn, current_rapport_id=None, card=None):
     """state는 아직 저장하지 않은 상담 상태, result는 LLM 분류, turn은 대화 쌍의 번호다.
-    card/career_entry는 카드 UI에서 들어온 이벤트로, 탐색 횟수를 증가시키지 않는다.
+    card는 카드를 확인하고 진로 상담을 시작하는 UI 이벤트로, 탐색 횟수를 증가시키지 않는다.
     반환 계획의 제약은 답변 전체에 적용하고 question/fixed_question은 질문 하나를 지정한다.
     """
     controller = ensure_controller(state)
-    before_stage = ensure_flow(state)
+    ensure_flow(state)
     enabled = controller["enabled"]
     if result:
         apply_input(state, result, turn)
@@ -217,8 +212,8 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
     plan["follow_up"] = result.follow_up if result else "reflect"
     if enabled and not plan["allow_recommendation"]:
         plan["triggered_rules"].append("recommendation_gate")
-    if card or career_entry:
-        enter_career(state, turn, reason="card_selected" if card else "cards_dismissed")
+    if card:
+        enter_career(state, turn)
         plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
         plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
         return _finish_plan(state, plan)
@@ -230,19 +225,14 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
             plan.update(question="intro_permission", fixed_question=INTRO_QUESTION)
         return _finish_plan(state, plan)
     if stage == "cards":
-        # 카드에 대한 질문에는 제시를 유지한다. 실제 진로 고민을 말하면 apply_input이 상담으로 전환한다.
+        # 카드 단계에서는 상담으로 넘어가지 않는다. 진로 상담은 카드를 확인하는 버튼으로만 시작한다.
         return _finish_plan(state, plan)
     if enabled:
         if stage == "career":
             _advance_direction(controller, result, turn)
         _queue_confirmations(state, result, turn)
-    if result.follow_up == "answer_only":
-        if stage == "rapport":
-            plan["rapport_action"] = _hold_rapport(state, turn)
-        return _finish_plan(state, plan)
-    if before_stage != "career" and stage == "career":
-        plan["question"] = "optional" if state["career_concern_received"] else "career_concern"
-        plan["fixed_question"] = None if state["career_concern_received"] else CAREER_CONCERN_QUESTION
+    # 알아가기는 중단할 수 없으므로, 설명만 원해도 라포 질문은 이어간다.
+    if result.follow_up == "answer_only" and stage != "rapport":
         return _finish_plan(state, plan)
     direction = controller["direction"]
     pending = controller["pending_confirmation_ids"]
@@ -283,6 +273,10 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, career_en
 # 응답 모델에는 이번 단계·허용 근거·질문 방식만 전달한다. 공통 대화 원칙은 prompts.py에 둔다.
 def format_turn_plan(plan):
     lines = ["## 이번 턴의 질문", f"대화 단계: {plan.get('conversation_stage', 'rapport')}"]
+    if plan.get("conversation_stage") == "rapport":
+        # 알아가기는 중단할 수 없으므로 진로 설명·조언을 미루고 지정 질문을 반드시 하게 한다.
+        lines.append("알아가기 단계다. 정보 요청이나 진로 고민이 있어도 설명·조언은 하지 않는다. content는 받아 두는 말 한두 문장으로, "
+                     "고민은 알아가기를 마친 뒤 진로 상담에서 다룬다고 안내한다.")
     if plan.get("controller_enabled"):
         lines.extend([
             f"요청 유형={plan['request_type']}, 개인화된 추천 허용={plan['allow_recommendation']}.",
@@ -293,7 +287,7 @@ def format_turn_plan(plan):
     if plan.get("conversation_stage") in ("intro", "rapport", "cards"):
         lines.append("suggestions는 빈 배열이다. 시작 안내의 두 선택지는 코드가 붙인다.")
     if plan.get("card") and plan["question"] == "career_concern":
-        lines.append("카드 선택을 짧게 받아들이고 현재 진로 고민을 듣는다.")
+        lines.append("진로 상담 화면이 새로 시작된다. 카드를 다시 해석하지 않고 현재 진로 고민을 듣는다.")
     if plan.get("fixed_question"):
         lines.append("질문은 코드가 붙인다. 먼저 요청에 답하고 question은 null: " + plan["fixed_question"])
     elif plan["question"] == "confirm":
@@ -421,8 +415,8 @@ def finalize_reply(state, plan, reply):
             question = (action_q["text"] if action_q else "지금 이야기에서 가장 중요하게 느끼는 점은 무엇인가요?")
             # 코드가 원래 라포 질문을 직접 전달했다면 실제로 물은 질문으로 기록한다.
             fallback_rapport_id = action_q["id"] if action_q else None
-        if plan["rapport_action"]["type"] in ("wrap_up", "concern"):
-            content = "아래 카드 중 지금 가장 나다운 카드 하나를 골라 주세요."
+        if plan["rapport_action"]["type"] == "wrap_up":
+            content = "대화를 보고 고른 카드를 아래에 보여드릴게요."
         elif plan["request_type"] == "recommendation" and RECOMMENDATION_ERRORS.intersection(errors):
             content = RECOMMENDATION_FALLBACK
         elif question:
@@ -465,7 +459,7 @@ def complete_turn(state, plan, reply):
             controller["asked_confirmations"][str(item_id)] = _item_version(state, _items(state)[item_id])
             if item_id in controller["pending_confirmation_ids"]:
                 controller["pending_confirmation_ids"].remove(item_id)
-    if plan["rapport_action"]["type"] in ("wrap_up", "concern"):
+    if plan["rapport_action"]["type"] == "wrap_up":
         controller["pending_card_offer"] = None
     exploration.complete_turn(state, plan, reply)
 
