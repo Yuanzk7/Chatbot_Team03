@@ -316,6 +316,7 @@ export default function App() {
         onPickSuggestion: setInput,
         onChooseCard: handleChooseCard,
         cardActionLabel: careerStarted ? '진로 상담으로 돌아가기' : '진로 상담 시작하기',
+        boldQuestions: hasRooms && room === 'rapport',
       }}
       composer={{
         value: input,

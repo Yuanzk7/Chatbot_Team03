@@ -13,6 +13,15 @@ function Avatar() {
   )
 }
 
+// 알아가기 채팅에서는 답변 끝 문단의 질문을 굵게 보여준다. 저장된 문장은 바꾸지 않고 화면에서만 강조한다.
+function emphasizeQuestion(content) {
+  const cut = content.lastIndexOf('\n\n')
+  const head = cut === -1 ? '' : content.slice(0, cut + 2)
+  const last = (cut === -1 ? content : content.slice(cut + 2)).trim()
+  if (!/[?？]$/.test(last) || last.includes('**')) return content
+  return `${head}**${last}**`
+}
+
 // 마지막 답변 아래에 카드 또는 후보를 표시한다. 자유응답 라포·카드 단계에서는 후보 답변을 숨긴다.
 export default function MessageList({
   messages,
@@ -26,6 +35,7 @@ export default function MessageList({
   onPickSuggestion,
   onChooseCard,
   cardActionLabel,
+  boldQuestions,
 }) {
   const bottomRef = useRef(null)
   const showSuggestions = conversationStage === 'intro' || conversationStage === 'career'
@@ -42,7 +52,9 @@ export default function MessageList({
             <Avatar />
             <div className="assistant-body">
               <div className="bubble assistant">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {boldQuestions ? emphasizeQuestion(m.content) : m.content}
+                </ReactMarkdown>
               </div>
               {idx === messages.length - 1 && !pending && pendingCards && (
                 <RapportCards cards={pendingCards} busy={busy} onStart={onChooseCard} startLabel={cardActionLabel} />
