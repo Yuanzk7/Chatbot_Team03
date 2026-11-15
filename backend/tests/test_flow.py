@@ -377,3 +377,27 @@ def test_history_after_restarted_rapport_keeps_rooms_apart():
     state["room_switches"] = state["room_switches"][:2]
     assert [h["content"] for h in history_for_model(rows[:10], state)] == [
         "알아가기를 다시 할게요.", "다시 알아가 볼게요.\n\n혼자 있을 때 주로 무엇을 하시나요?", "게임을 해요"]
+
+
+# 진로 상담에서는 알아가기 채팅에서 나온 항목만 표시하고, 그 근거를 먼저 연결하되 단정하지 않도록 지시한다.
+def test_career_reply_marks_rapport_items_and_links_them_first():
+    state = career_state()
+    state["career_started_turn"] = 2
+    state["room_switches"] = [{"room": "career", "turn": 2}]
+    state["experiences"] = [dict(id=1, text="유럽 여행", status="confirmed", evidence="유럽 여행", turn=1),
+                            dict(id=2, text="인공지능 관심", status="confirmed", evidence="인공지능", turn=3)]
+    text = format_state(state, 4, C.plan_turn(state, classified(), 4))
+    assert "id 1: 유럽 여행 (알아가기)" in text
+    assert "id 2: 인공지능 관심" in text and "인공지능 관심 (알아가기)" not in text
+    assert "'(알아가기)' 항목 중 이번 고민과 관련 있는 경험·가치에서 먼저 출발한다" in text
+
+
+# 알아가기 단계에서는 모든 항목이 알아가기에서 나왔으므로 표시와 연결 지시를 붙이지 않는다.
+def test_rapport_reply_has_no_rapport_mark_or_link_instruction():
+    state = empty_state()
+    state["conversation_stage"] = "rapport"
+    state["rapport"]["questions"] = [{"id": 17, "status": "answered", "text": "경험", "asks": 1, "holds": 0},
+                                     {"id": 11, "status": "pending", "text": "흥미", "asks": 0, "holds": 0}]
+    state["experiences"] = [dict(id=1, text="유럽 여행", status="confirmed", evidence="유럽 여행", turn=1)]
+    text = format_state(state, 2, C.plan_turn(state, classified(), 2))
+    assert "(알아가기)" not in text

@@ -294,6 +294,12 @@ def format_turn_plan(plan):
             line += (" 이번 요청이나 진로 고민에 대한 설명·조언은 하지 않고, 알아가기를 마친 뒤 진로 상담에서 다룬다고 "
                      "한 문장으로 안내한다.")
         lines.append(line)
+    if plan.get("conversation_stage") == "career":
+        # 알아가기 답변을 이후 상담의 근거로 먼저 쓰되, 사용자가 직접 연결하지 않은 해석은 확인을 거친다.
+        lines.append("개인화된 설명은 확인된 '(알아가기)' 항목 중 이번 고민과 관련 있는 경험·가치에서 먼저 출발한다. "
+                     "사용자가 직접 연결하지 않았다면 질문할 수 있는 턴에 '알아가기에서 ~라고 하셨는데, 이번 고민에서도 ~이 "
+                     "중요할까요?'처럼 그 경험이 이번 고민의 기준과 관련 있는지 묻는다. 경험을 분야·직무로 연결하지 않으며, "
+                     "단정하지 않는다는 원칙 자체는 말하지 않는다.")
     if plan.get("controller_enabled"):
         lines.extend([
             f"요청 유형={plan['request_type']}, 개인화된 추천 허용={plan['allow_recommendation']}.",
