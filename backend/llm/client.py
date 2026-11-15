@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
 
-from counseling.career_map import CareerMapOutput, active_criteria
+from counseling.career_map import CareerMapOutput, active_criteria, confirmed_experiences
 from counseling.controller import finalize_reply
 from counseling.exploration import ExplorationOutput, classification_context
 from counseling.state import Classification, classification_state, format_state
@@ -96,6 +96,8 @@ def summarize(state, history) -> CareerMapOutput:
         SUMMARY_PROMPT
         + "\n## 선택 기준\n"
         + json.dumps(active_criteria(state), ensure_ascii=False)
+        + "\n## 확인된 경험·관심 활동\n"
+        + json.dumps(confirmed_experiences(state), ensure_ascii=False)
         + "\n## 상담 진행·행동 기록\n"
         + json.dumps(classification_context(state), ensure_ascii=False)
     )

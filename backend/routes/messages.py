@@ -9,7 +9,7 @@ from counseling.state import MergeError, merge
 from llm.client import classify, generate_reply
 from routes.common import (
     acquire_session_lock, history_and_turn, insert_assistant, llm_errors, load_messages, load_state,
-    message_dict, require_session, save_controller_event, save_state,
+    message_dict, require_open, require_session, save_controller_event, save_state,
 )
 from storage.db import get_db
 
@@ -51,6 +51,7 @@ def send_message(session_id: str, request: MessageRequest):
             ).fetchone()
             return {"message": message_dict(reply), "state": state}
 
+        require_open(state)
         history, turn = history_and_turn(load_messages(conn, session_id), state)
 
         with llm_errors(extra=(MergeError,)):

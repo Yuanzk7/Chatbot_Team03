@@ -63,6 +63,7 @@ export default function ChatScreen({ header, nav, chat, composer, panel }) {
             careerMap={panel.careerMap}
             stale={panel.stale}
             canSummarize={panel.canSummarize}
+            ended={panel.ended}
             summarizing={panel.summarizing}
             summaryError={panel.summaryError}
             onSummarize={panel.onSummarize}

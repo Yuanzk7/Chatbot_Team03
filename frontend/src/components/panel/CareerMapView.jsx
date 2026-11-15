@@ -1,10 +1,12 @@
 const STATUS_LABEL = { confirmed: '확인됨', unconfirmed: '미확인', withdrawn: '철회' }
 
-// 진로맵: '현재까지 정리하기' 버튼과 결과(선택 기준·후보 비교·다음 탐색 행동).
+// 진로맵: 상담을 마칠 때 한 번 누르는 정리 버튼과 결과(사용자 소개·선택 기준·후보 비교·다음 탐색 행동).
+// 진로맵을 만들면 상담이 끝나므로, 끝난 상담에는 버튼을 보여주지 않는다.
 export default function CareerMapView({
   careerMap,
   stale,
   canSummarize,
+  ended,
   summarizing,
   summaryError,
   onSummarize,
@@ -14,25 +16,37 @@ export default function CareerMapView({
 
   return (
     <div>
-      <button
-        type="button"
-        className={`summarize${stale ? ' stale' : ''}`}
-        onClick={onSummarize}
-        disabled={!canSummarize}
-      >
-        {summarizing ? '정리하는 중…' : careerMap ? '다시 정리하기' : '현재까지 정리하기'}
-      </button>
-      {stale && <p className="notice">추가 대화가 아직 반영되지 않았어요. 다시 정리하면 갱신돼요.</p>}
+      {!ended && (
+        <button
+          type="button"
+          className={`summarize${stale ? ' stale' : ''}`}
+          onClick={onSummarize}
+          disabled={!canSummarize}
+        >
+          {summarizing ? '정리하는 중…' : '상담 마치고 진로맵 만들기'}
+        </button>
+      )}
+      {stale && !ended && <p className="notice">추가 대화가 아직 반영되지 않았어요. 다시 정리하면 갱신돼요.</p>}
       {summaryError && <p className="panel-error">{summaryError}</p>}
 
       {!careerMap && !summaryError && (
         <p className="panel-empty">
-          대화를 나눈 뒤 버튼을 누르면 지금까지의 선택 기준, 후보 비교, 다음 탐색 행동을 정리해요.
+          상담을 마칠 때 누르면 지금까지 나눈 이야기를 선택 기준, 후보 비교, 다음 탐색 행동으로 한 번에 정리해요.
+          정리하면 상담이 끝나요.
         </p>
       )}
 
       {careerMap && (
         <>
+          {/* 이전에 정리한 진로맵에는 소개가 없으므로 있을 때만 보여준다. */}
+          {careerMap.profile && (
+            <section>
+              <h3>윤이가 정리한 나</h3>
+              <p>{careerMap.profile}</p>
+              <p className="profile-note">대화를 바탕으로 윤이가 정리한 내용이에요.</p>
+            </section>
+          )}
+
           <section>
             <h3>선택 기준</h3>
             {careerMap.criteria.length === 0 ? (

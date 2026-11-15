@@ -55,6 +55,8 @@ export default function App() {
   // 채팅 전환 기록으로 알아가기·진로 상담을 나눈다. 시작 턴 기록이 없는 이전 버전의 진로 상담은 목록 없이 한 채팅으로 보여준다.
   const careerStarted = state?.career_started_turn != null
   const inCareer = state?.conversation_stage === 'career'
+  // 진로맵은 상담을 마칠 때 한 번 정리하는 용도라, 진로맵을 만든 뒤에는 대화를 이어가지 않는다.
+  const ended = Boolean(state?.counseling_ended)
   const switches =
     state?.room_switches ?? (careerStarted ? [{ room: 'career', turn: state.career_started_turn }] : [])
   const roomOf = (turn) => switches.reduce((cur, s) => (turn >= s.turn ? s.room : cur), 'rapport')
@@ -74,7 +76,7 @@ export default function App() {
     {
       key: 'rapport',
       title: '알아가기',
-      description: inCareer ? '다시 하면 라포 카드가 새로 만들어져요' : '윤이와 서로 알아가는 대화',
+      description: ended ? '알아가기를 마쳤어요' : inCareer ? '다시 하면 라포 카드가 새로 만들어져요' : '윤이와 서로 알아가는 대화',
       status: inCareer ? '완료' : '진행 중',
       locked: false,
     },
@@ -83,10 +85,12 @@ export default function App() {
       title: '진로 상담',
       description: !careerStarted
         ? '알아가기를 마치면 열려요'
-        : inCareer
-          ? '진로 고민을 함께 살펴보는 대화'
-          : '새 카드를 확인하면 이어서 상담해요',
-      status: !careerStarted ? '잠김' : inCareer ? '진행 중' : '읽기만 가능',
+        : ended
+          ? '진로맵을 만들어 상담을 마쳤어요'
+          : inCareer
+            ? '진로 고민을 함께 살펴보는 대화'
+            : '새 카드를 확인하면 이어서 상담해요',
+      status: !careerStarted ? '잠김' : ended ? '종료' : inCareer ? '진행 중' : '읽기만 가능',
       locked: !careerStarted,
     },
   ]
@@ -208,7 +212,7 @@ export default function App() {
 
   // 목록에서 채팅을 연다. 진로 상담 중에 알아가기를 고르면 새 카드가 만들어진다고 알린 뒤 알아가기를 다시 시작한다.
   async function openRoom(key) {
-    if (key !== 'rapport' || !inCareer) {
+    if (key !== 'rapport' || !inCareer || ended) {
       setRoom(key)
       setView('chat')
       return
@@ -232,12 +236,14 @@ export default function App() {
   }
 
   async function handleSummarize() {
-    if (busy || !sessionId) return
+    if (busy || !sessionId || ended) return
+    if (!window.confirm('진로맵을 만들면 상담이 끝나고 더 이상 대화할 수 없어요. 지금 정리할까요?')) return
     setSummarizing(true)
     setSummaryError(null)
     try {
-      const { career_map } = await summarize(sessionId)
+      const { career_map, state: newState } = await summarize(sessionId)
       setCareerMap(career_map)
+      setState(newState)
     } catch (e) {
       setSummaryError(e.message)
     } finally {
@@ -322,12 +328,14 @@ export default function App() {
         value: input,
         onChange: setInput,
         onSubmit: handleSubmit,
-        disabled: !sessionId || busy || Boolean(pendingCards) || readOnly || (room === 'rapport' && inCareer),
-        placeholder: pendingCards
-          ? '카드를 확인하고 진로 상담을 시작해 주세요'
-          : readOnly
-            ? '새 카드를 확인하면 이어서 상담할 수 있어요'
-            : undefined,
+        disabled: !sessionId || busy || ended || Boolean(pendingCards) || readOnly || (room === 'rapport' && inCareer),
+        placeholder: ended
+          ? '상담이 끝났어요. 새 상담에서 다시 이야기할 수 있어요'
+          : pendingCards
+            ? '카드를 확인하고 진로 상담을 시작해 주세요'
+            : readOnly
+              ? '새 카드를 확인하면 이어서 상담할 수 있어요'
+              : undefined,
       }}
       panel={{
         open: mapOpen,
@@ -335,7 +343,8 @@ export default function App() {
         onClose: () => setMapOpen(false),
         careerMap,
         stale,
-        canSummarize: Boolean(sessionId) && hasUserMessages && !busy,
+        canSummarize: Boolean(sessionId) && hasUserMessages && !busy && !ended,
+        ended,
         summarizing,
         summaryError,
         onSummarize: handleSummarize,

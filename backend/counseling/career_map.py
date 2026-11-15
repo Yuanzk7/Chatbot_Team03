@@ -29,6 +29,8 @@ class NextAction(BaseModel):
 class CareerMapOutput(BaseModel):
     candidates: List[Candidate]
     next_actions: List[NextAction]
+    # 진로맵 맨 위에 보여줄 사용자 소개. 사용자가 직접 말한 경험과 확인된 기준만 근거로 쓴다.
+    profile: str = ""
 
 
 class CareerMapError(Exception):
@@ -44,6 +46,12 @@ def active_criteria(state):
         for i in conversation_items(state, "criteria")
         if i["status"] != "withdrawn"
     ]
+
+
+# 사용자 소개의 근거로 대화에서 확인한 경험만 전달한다. 카드 자동 항목과 미확인·철회 항목은 제외한다.
+def confirmed_experiences(state):
+    ensure_flow(state)
+    return [i["text"] for i in conversation_items(state, "experiences") if i["status"] == "confirmed"]
 
 
 def build_career_map(state, output: CareerMapOutput, last_message_id):
@@ -75,6 +83,7 @@ def build_career_map(state, output: CareerMapOutput, last_message_id):
         next_actions.append({"text": text, "selected": a.selected})
 
     return {
+        "profile": output.profile.strip(),
         "criteria": criteria,
         "candidates": candidates,
         "next_actions": map_actions(state, next_actions),

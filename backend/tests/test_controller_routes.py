@@ -625,3 +625,38 @@ def test_decision_log_keeps_discarded_output(session_id, monkeypatch, model_repl
         assert decision["discarded"]["reply"]["content"] == model_reply["content"]
     else:
         assert "회로를 직접 다루는 일이 많아요." in content
+
+
+# 진로맵을 만들면 상담이 끝나 메시지·다시 정리·알아가기 다시 하기를 모두 막는다. 같은 요청의 재전송은 저장된 답변을 돌려준다.
+def test_summary_ends_counseling_and_blocks_further_turns(session_id, monkeypatch):
+    stub_models(monkeypatch)
+    sent = messages.send_message(session_id, messages.MessageRequest(content="대학원 탐색", request_id="before-end"))
+    monkeypatch.setattr(summary, "summarize", Mock(return_value=CareerMapOutput(
+        candidates=[], next_actions=[], profile="연구를 탐색 중인 분이에요.")))
+    result = summary.summarize_session(session_id)
+    assert result["state"]["counseling_ended"] is True
+    assert result["career_map"]["profile"] == "연구를 탐색 중인 분이에요."
+    blocked_calls = [
+        lambda: messages.send_message(session_id, messages.MessageRequest(content="더 이야기할래", request_id="after-end")),
+        lambda: summary.summarize_session(session_id),
+        lambda: cards.restart_rapport(session_id),
+    ]
+    for call in blocked_calls:
+        with pytest.raises(HTTPException) as blocked:
+            call()
+        assert blocked.value.status_code == 422 and "상담이 끝났어요" in blocked.value.detail
+    resent = messages.send_message(session_id, messages.MessageRequest(content="대학원 탐색", request_id="before-end"))
+    assert resent["message"] == sent["message"]
+
+
+# 진로 상담을 처음 시작하는 답변에는 진로맵이 마지막 정리용이라는 안내를 질문 앞에 넣는다.
+def test_first_career_turn_explains_career_map_before_question(session_id, monkeypatch):
+    with db.get_db() as conn:
+        state, next_id = load_state(conn, session_id)
+        offered = card_deck.random_offer()
+        state["rapport"]["cards"] = card_deck.new_cards(offered, "random", 0)
+        save_state(conn, session_id, state, next_id)
+    monkeypatch.setattr(cards, "generate_reply", Mock(side_effect=controlled_reply))
+    content = cards.choose_card(session_id, cards.CardChoiceRequest(card_id=offered[0]["id"]))["messages"][-1]["content"]
+    assert content == ("함께 살펴보겠습니다.\n\n" + cards.CAREER_MAP_NOTICE
+                       + "\n\n지금 진로와 관련해서 어떤 고민이 있으신가요?")

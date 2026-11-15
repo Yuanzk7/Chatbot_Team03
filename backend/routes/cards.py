@@ -8,22 +8,37 @@ from counseling.flow import RESTART_TEXT, enter_career
 from llm.client import generate_reply
 from routes.common import (
     acquire_session_lock, history_and_turn, insert_assistant, llm_errors, load_messages, load_state,
-    require_pending_cards, require_session, save_controller_event, save_state,
+    require_open, require_pending_cards, require_session, save_controller_event, save_state,
 )
 from storage.db import get_db
 
 router = APIRouter()
+
+# 진로 상담을 처음 시작할 때 한 번 알린다. 진로맵은 상담을 마칠 때 한 번 정리하는 용도다.
+CAREER_MAP_NOTICE = ("상담을 마치고 싶을 때는 오른쪽 위 **진로맵**에서 **상담 마치고 진로맵 만들기**를 눌러 주세요. "
+                     "지금까지 나눈 이야기를 한 번에 정리해 드리고, 정리하면 상담이 끝나요.")
 
 
 class CardChoiceRequest(BaseModel):
     card_id: int
 
 
+# 안내 문장을 답변 끝의 질문 앞에 넣는다. 질문은 사용자가 답할 마지막 문장으로 남긴다.
+def _with_notice(reply, notice):
+    question = reply.question
+    if question and reply.content.endswith(question):
+        body = reply.content[: -len(question)].rstrip()
+        return "\n\n".join(part for part in (body, notice, question) if part)
+    return (reply.content + "\n\n" + notice).strip()
+
+
 # 카드 확인·알아가기 재시작 후 답변을 생성하고, UI 동작 기록·상태·판정을 한 번에 저장한다.
 # 모델 또는 DB 오류가 나면 호출 라우트가 연결을 닫아 이번 변경을 모두 취소한다.
-def _complete_card_turn(conn, session_id, state, next_id, history, turn, user_text, plan):
+def _complete_card_turn(conn, session_id, state, next_id, history, turn, user_text, plan, notice=None):
     with llm_errors():
         reply = generate_reply(state, history, user_text, turn, plan)
+        if notice:
+            reply.content = _with_notice(reply, notice)
         rapport.apply_reply(state["rapport"], plan["rapport_action"], reply.asked_question_id)
         complete_turn(state, plan, reply)
     user_message_id = conn.execute(
@@ -68,7 +83,8 @@ def choose_card(session_id: str, request: CardChoiceRequest):
         # 카드는 챗봇이 정했으므로 사용자가 고른 것처럼, 또는 진로 기준처럼 기록하지 않는다.
         user_text = "진로 상담을 시작할게요."
         plan = plan_turn(state, None, turn, card=chosen)
-        return _complete_card_turn(conn, session_id, state, next_id, history, turn, user_text, plan)
+        return _complete_card_turn(conn, session_id, state, next_id, history, turn, user_text, plan,
+                                   notice=CAREER_MAP_NOTICE)
     finally:
         if conn is not None:
             conn.close()
@@ -84,6 +100,7 @@ def restart_rapport(session_id: str):
         conn = get_db()
         require_session(conn, session_id)
         state, next_id = load_state(conn, session_id)
+        require_open(state)
         if state["conversation_stage"] != "career" or state.get("career_started_turn") is None:
             raise HTTPException(status_code=422, detail="진로 상담 중에만 알아가기를 다시 할 수 있습니다.")
         rows = load_messages(conn, session_id)

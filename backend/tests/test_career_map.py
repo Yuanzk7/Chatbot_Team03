@@ -5,7 +5,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from counseling.career_map import CareerMapError, CareerMapOutput, active_criteria, build_career_map  # noqa: E402
+from counseling.career_map import (  # noqa: E402
+    CareerMapError, CareerMapOutput, active_criteria, build_career_map, confirmed_experiences,
+)
 from counseling.state import empty_state  # noqa: E402
 
 
@@ -74,3 +76,21 @@ def test_blank_candidate_name_or_action_raises():
         build_career_map(state_with_criteria(), output(next_actions=[
             {"text": "", "selected": False},
         ]), last_message_id=10)
+
+
+# 진로맵 맨 위의 사용자 소개는 앞뒤 공백을 정리해 담고, 소개가 없는 출력도 그대로 처리한다.
+def test_profile_is_trimmed_and_optional():
+    cm = build_career_map(state_with_criteria(), output(profile="  영상 편집을 즐기는 분이에요.  "), last_message_id=10)
+    assert cm["profile"] == "영상 편집을 즐기는 분이에요."
+    assert build_career_map(state_with_criteria(), output(), last_message_id=10)["profile"] == ""
+
+
+# 소개의 근거로는 대화에서 확인한 경험만 전달하고, 미확인 경험과 카드 자동 항목은 뺀다.
+def test_confirmed_experiences_exclude_unconfirmed_and_card_items():
+    state = empty_state()
+    state["experiences"] = [
+        {"id": 1, "text": "영상 편집", "evidence": "", "turn": 1, "status": "confirmed"},
+        {"id": 2, "text": "연구 인턴", "evidence": "", "turn": 2, "status": "unconfirmed"},
+        {"id": 3, "text": "카드 경험", "evidence": "", "turn": 1, "status": "confirmed", "source": "rapport_card"},
+    ]
+    assert confirmed_experiences(state) == ["영상 편집"]

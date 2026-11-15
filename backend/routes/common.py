@@ -35,6 +35,12 @@ def require_session(conn, session_id):
         raise HTTPException(status_code=404, detail="상담을 찾을 수 없습니다.")
 
 
+# 진로맵은 상담을 마칠 때 한 번 정리하는 용도라, 진로맵을 만든 뒤에는 대화를 이어가지 않는다.
+def require_open(state):
+    if state.get("counseling_ended"):
+        raise HTTPException(status_code=422, detail="진로맵을 만들어 상담이 끝났어요. 새 상담에서 다시 이야기할 수 있어요.")
+
+
 # 저장된 상담 상태를 읽고 이전 버전 상담에 빠진 라포·컨트롤러 기본값을 메모리에서 보완한다.
 # 실제 저장은 요청 처리 성공 후 save_state가 맡으므로 조회만으로 기존 DB를 바꾸지 않는다.
 def load_state(conn, session_id):
