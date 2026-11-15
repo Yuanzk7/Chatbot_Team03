@@ -401,3 +401,23 @@ def test_rapport_reply_has_no_rapport_mark_or_link_instruction():
     state["experiences"] = [dict(id=1, text="유럽 여행", status="confirmed", evidence="유럽 여행", turn=1)]
     text = format_state(state, 2, C.plan_turn(state, classified(), 2))
     assert "(알아가기)" not in text
+
+
+# 기준 없이 추천을 요청하면, 알아가기에서 확인된 경험이 있을 때 그 경험에서 출발한 기준 질문을 모델이 만들고
+# 질문을 빠뜨리면 고정 질문으로 보완한다. 진로 상담에서 나온 경험뿐이면 기존 고정 질문을 그대로 붙인다.
+def test_gather_criterion_starts_from_rapport_experience_with_fixed_fallback():
+    state = career_state()
+    state["career_started_turn"] = 2
+    state["room_switches"] = [{"room": "career", "turn": 2}]
+    state["experiences"] = [dict(id=1, text="유럽 여행", status="confirmed", evidence="유럽 여행", turn=1)]
+    plan = C.plan_turn(state, classified(request_type="recommendation"), 3)
+    assert plan["question"] == "gather_criterion" and plan["fixed_question"] is None
+    assert "그 경험에서 중요했던 점이 진로를 고를 때도 중요한지" in C.format_turn_plan(plan)
+    asked = C.finalize_reply(state, plan, generated(question="여행에서 사람을 만난 점이 진로에서도 중요할까요?"))
+    assert asked.question == "여행에서 사람을 만난 점이 진로에서도 중요할까요?"
+    missing = C.finalize_reply(state, plan, generated(question=None))
+    assert missing.question == C.CRITERION_QUESTION and "missing_question" in missing.warnings
+
+    state["experiences"][0]["turn"] = 3
+    plan = C.plan_turn(state, classified(request_type="recommendation"), 4)
+    assert plan["fixed_question"] == C.CRITERION_QUESTION

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from counseling import exploration
 from counseling.exploration import ExplorationInput
 from counseling.controller import empty_controller, format_turn_plan
-from counseling.flow import conversation_items, ensure_flow, room_of, room_switches
+from counseling.flow import conversation_items, ensure_flow, rapport_item_ids
 from counseling.rapport import Category, Tag, empty_rapport, format_rapport
 
 Status = Literal["confirmed", "unconfirmed", "withdrawn"]
@@ -143,14 +143,6 @@ def merge(state, result: Classification, turn, next_id, user_message=None):
 _LABELS = {"experiences": "경험·관심 활동", "criteria": "선택 기준", "constraints": "현실적 제약"}
 
 
-# 진로 상담 중에는 알아가기 채팅에서 나온 항목을 골라, 응답이 그 근거를 먼저 연결할 수 있게 표시한다.
-def _rapport_item_ids(state):
-    switches = room_switches(state)
-    if state.get("conversation_stage") != "career" or not switches:
-        return set()
-    return {i["id"] for i in conversation_items(state) if room_of(i["turn"], switches) == "rapport"}
-
-
 # 응답 모델이 basis_ids를 정확히 고를 수 있도록 항목 내용과 실제 id를 함께 전달한다.
 def _entry(item, rapport_ids):
     return f"id {item['id']}: {item['text']}" + (" (알아가기)" if item["id"] in rapport_ids else "")
@@ -192,7 +184,7 @@ def format_state(state, turn=None, plan=None):
         lines.append(format_turn_plan(plan))
     lines.append("## 현재까지 확인한 사용자 정보")
     lines.append(f"호칭: {state['preferred_name'] or '(아직 확인 안 됨)'}")
-    rapport_ids = _rapport_item_ids(state)
+    rapport_ids = rapport_item_ids(state)
     for key, label in _LABELS.items():
         confirmed = [i for i in conversation_items(state, key) if i["status"] == "confirmed"]
         unconfirmed = [i for i in conversation_items(state, key) if i["status"] == "unconfirmed"]

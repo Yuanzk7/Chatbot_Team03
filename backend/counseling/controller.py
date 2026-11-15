@@ -8,12 +8,14 @@ from dataclasses import dataclass, field
 
 from counseling import exploration
 from counseling.flow import (
-    INTRO_QUESTION, apply_input, conversation_items, ensure_flow, enter_career, restart_rapport, suggestions_for_stage,
+    INTRO_QUESTION, apply_input, conversation_items, ensure_flow, enter_career, rapport_item_ids, restart_rapport,
+    suggestions_for_stage,
 )
 from counseling.rapport import choose_action
 
 DIRECTION_LIMIT = 10
 CAREER_CONCERN_QUESTION = "지금 진로와 관련해서 어떤 고민이 있으신가요?"
+CRITERION_QUESTION = "진로를 선택할 때 본인이 중요하게 생각하는 것은 무엇인가요?"
 RECOMMENDATION_FALLBACK = "지금까지 확인한 경험과 기준만으로는 진로 후보를 추천하기 어려워요."
 RETRY_CONTENT = "답변을 제대로 만들지 못했어요. 같은 내용을 한 번 더 보내 주시면 다시 답할게요."
 # 알아가기 중 필수 질문이 빠졌을 때 붙이는 질문. 진로 고민을 묻는 일반 질문은 알아가기에 맞지 않는다.
@@ -265,7 +267,11 @@ def plan_turn(state, result, turn, current_rapport_id=None, card=None, restart=F
     elif enabled and stage == "career" and result.request_type == "recommendation" and not experiences:
         plan.update(question="gather_experience", fixed_question="지금까지 재미있었던 경험이나 해보고 싶은 활동은 무엇인가요?")
     elif enabled and stage == "career" and result.request_type == "recommendation" and not criteria:
-        plan.update(question="gather_criterion", fixed_question="진로를 선택할 때 본인이 중요하게 생각하는 것은 무엇인가요?")
+        # 알아가기에서 확인된 경험이 있으면 그 경험에서 출발한 기준 질문을 모델이 만들고, 빠뜨리면 고정 질문으로 보완한다.
+        if set(experiences) & rapport_item_ids(state):
+            plan.update(question="gather_criterion", fallback_question=CRITERION_QUESTION)
+        else:
+            plan.update(question="gather_criterion", fixed_question=CRITERION_QUESTION)
     elif enabled and result.needs_reason:
         plan["triggered_rules"].append("confirm_interpretation")
         plan.update(question="explore_reason", fixed_question="그 선택을 생각하게 된 이유나 경험은 무엇인가요?")
@@ -320,6 +326,12 @@ def format_turn_plan(plan):
                      "공식 페이지에서 확인하도록 안내한다. 개인화된 판단은 이번 턴의 추천 허용 여부와 근거 규칙을 따른다.")
     if plan.get("fixed_question"):
         lines.append("질문은 코드가 붙인다. 먼저 요청에 답하고 question은 null: " + plan["fixed_question"])
+    elif plan["question"] == "gather_criterion":
+        lines.append("추천에 필요한 선택 기준이 아직 없다. content에서는 먼저 요청에 답한다(아직 고를 수 없는 이유, 필요하면 "
+                     "일반 정보). 확인된 '(알아가기)' 경험 중 이번 요청과 관련 있는 것 하나에서 출발해, "
+                     "그 경험에서 중요했던 점이 진로를 고를 때도 중요한지 묻는 질문 하나를 question에만 쓰고 content에는 질문을 "
+                     "쓰지 않는다. 다른 기준을 말할 여지는 질문 안에 둔다. 예: '알아가기에서 ~가 즐거웠다고 하셨는데, 진로를 고를 "
+                     "때도 ~이 중요할까요, 아니면 다른 점이 더 중요할까요?'")
     elif plan["question"] == "confirm":
         lines.append("다음 해석을 확인하는 질문 하나로 한다: " + "; ".join(plan["confirm_items"]))
     elif plan["question"] == "follow_up":
@@ -419,7 +431,7 @@ def finalize_reply(state, plan, reply):
         # 필수 질문만 빠졌다면 설명을 버리지 않고 질문만 보완한다.
         warnings.append("missing_question")
         action_q = plan["rapport_action"].get("question")
-        question = action_q["text"] if action_q else (
+        question = action_q["text"] if action_q else plan.get("fallback_question") or (
             RAPPORT_FALLBACK_QUESTION if plan.get("conversation_stage") == "rapport"
             else "지금 이야기에서 가장 고민되는 점은 무엇인가요?")
         fallback_rapport_id = action_q["id"] if action_q else None
@@ -441,7 +453,7 @@ def finalize_reply(state, plan, reply):
                                 for c in reply.recommendations],
         }
         metadata, fallback_rapport_id = None, None
-        question = plan.get("fixed_question")
+        question = plan.get("fixed_question") or plan.get("fallback_question")
         if requires_question and not question:
             action_q = plan["rapport_action"].get("question")
             question = action_q["text"] if action_q else (

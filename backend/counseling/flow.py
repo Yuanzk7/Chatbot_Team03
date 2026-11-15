@@ -125,6 +125,14 @@ def suggestions_for_stage(state, suggestions, has_question=True):
     return list(suggestions)
 
 
+# 진로 상담 중에 알아가기 채팅에서 나온 항목을 고른다. 응답 표시와 기준 질문의 출발점으로 쓴다.
+def rapport_item_ids(state):
+    switches = room_switches(state)
+    if state.get("conversation_stage") != "career" or not switches:
+        return set()
+    return {i["id"] for i in conversation_items(state) if room_of(i["turn"], switches) == "rapport"}
+
+
 # 알아가기 구간을 질문·사용자 답변 원문과 카드 선택 사실로만 정리한다.
 # 챗봇이 덧붙인 해석·정리 문장은 넣지 않는다. 질문은 코드가 답변 끝에 붙인 마지막 문단에서 가져온다.
 def _rapport_record(rows, selected):
